@@ -18,9 +18,14 @@ const CONFIG = {
   OWNER_ID: 'OWNER',                     // master admin sign-in (hidden, opened with #owner)
   OWNER_DEFAULT_PASSWORD: 'owner-2026',   // change it after the first sign-in
   PLATFORM_OWNER_EMAIL: 'owner@yourdomain.com', // the only identity allowed to manage sponsors (mirror of PLATFORM_OWNER_EMAIL in your backend env)
-  SPONSOR_RATE_NAIRA_PER_WEEK: { global: 18000, village: 5000 }
-};
-
+ 
+  SPONSOR_RATE_NAIRA_PER_WEEK: { global: 18000, village: 5000 },
+  SUBSCRIPTION: {
+    basic: 30000,
+    premium: 50000,
+    duration_months: 12
+  },
+  MAX_SPONSOR_SLOTS: 3 // per s.5
 const LEVIES = [
   { id: 'annual',    name: 'Annual dues',         fixed: true,  def: 12000, color: '#1A1A4E' },
   { id: 'burial',    name: 'Burial levy',         fixed: true,  def: 5000,  color: '#D2395B' },
