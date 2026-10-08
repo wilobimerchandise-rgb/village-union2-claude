@@ -135,5 +135,7 @@ Governed by laws of Federal Republic of Nigeria. Talks, then mediation/arbitrati
 
 Signatures
 Licensor: [name] [title] Signature Date
+
 Licensee President: [name] Signature Date
+
 Licensee Secretary: [name] Signature Date
