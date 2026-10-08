@@ -153,7 +153,7 @@ Licensor is not a financial institution, is not licensed by the CBN, and is not 
 8.3 Subscription covers record-keeping, receipt generation, audit trail, monthly/yearly reports, and Drive archive.
 8.4 If subscription expires and is not renewed within 30 days, Licensor may suspend access. Licensee may export its records during 30-day grace period, after which Licensor may archive/delete per law.
 8.5 Sponsor billboard fees are separate income for Licensor, paid by sponsors. Licensee has no claim to them.
-8.6 Premium plan at ₦[____] per year allows removal of Sponsor Slots and "Powered by ASSOCIT" mark.
+8.6 Premium plan at ₦50,000 per year allows removal of Sponsor Slots and "Powered by ASSOCIT" mark.
 
 9. Term and ending
 This agreement runs for 12 months from subscription payment and renews on payment. Licensor may suspend the service if Licensee breaches this agreement or fails to renew. On ending, Licensee may export its records for 30 days, after which Licensor may delete them, subject to law.
@@ -162,6 +162,6 @@ This agreement runs for 12 months from subscription payment and renews on paymen
 This agreement is governed by the laws of the Federal Republic of Nigeria. The parties shall first try to settle any dispute by talks, then by mediation / arbitration under the Arbitration and Mediation Act 2023, and the courts of [Lagos State] have jurisdiction.
 
 Signatures
-Licensor: [name] [title] Signature Date
+Licensor: [WILOBI-STACK] [OWNER] Signature: WOBI Date:
 Licensee President: [name] Signature Date
 Licensee Secretary: [name] Signature Date
