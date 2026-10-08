@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VillageVault | Verified financial records for village unions</title>
+<meta name="description" content="One verified ledger for your village union: annual dues, burial levy, life insurance levy, party donations and support levy, with monthly and yearly PDF reports.">
+<meta name="theme-color" content="#1A1A4E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%231A1A4E'/%3E%3Cpath d='M16 6l8 5v10l-8 5-8-5V11z' fill='none' stroke='%23F5B83D' stroke-width='2.4'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%23F5B83D'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ============ PUBLIC LANDING PAGE ============ -->
+<div id="site">
+  <header class="nav" id="nav">
+    <div class="wrap nav-in">
+      <a class="brand" href="#top" aria-label="VillageVault home">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#1A1A4E"/><path d="M16 6l8 5v10l-8 5-8-5V11z" fill="none" stroke="#F5B83D" stroke-width="2.4"/><circle cx="16" cy="16" r="3" fill="#F5B83D"/></svg>
+        <span>VillageVault</span>
+      </a>
+      <nav class="nav-links" id="navLinks" aria-label="Main">
+        <a href="#levies" data-act="scroll" data-target="levies">Levies</a>
+        <a href="#how" data-act="scroll" data-target="how">How it works</a>
+        <a href="#villages" data-act="scroll" data-target="villages">Villages</a>
+        <a href="#accountability" data-act="scroll" data-target="accountability">Accountability</a>
+        <a href="#faq" data-act="scroll" data-target="faq">Questions</a>
+      </nav>
+      <div class="nav-right">
+        <label class="sr-only" for="navVillage">Open your village</label>
+        <select id="navVillage" class="select select-nav" data-village-select><option value="" disabled selected>Your village</option></select>
+        <button class="nav-burger" type="button" data-act="toggle-nav" aria-label="Open menu" aria-expanded="false" aria-controls="navLinks">
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="top">
+    <!-- HERO -->
+    <section class="hero">
+      <div class="wrap hero-grid">
+        <div class="hero-copy">
+          <h1>Every naira your village pays, recorded by name.</h1>
+          <p class="lead">VillageVault keeps your union's dues, levies and donations in one verified ledger. Members upload proof of payment, an admin checks it, and the books update with that admin's name and a timestamp.</p>
+          <div class="access" id="access">
+            <label class="access-label" for="heroVillage">Choose your village</label>
+            <select id="heroVillage" class="select" data-village-select><option value="" disabled selected>Select your village</option></select>
+            <form class="access-step" id="accessForm" autocomplete="off" novalidate hidden>
+              <p class="access-hint" id="accessHint">Enter the ID and password your village admin gave you. Members and admins use the same form and each lands on their own dashboard.</p>
+              <div class="form-row">
+                <div class="field"><label for="loginId">Member or admin ID</label><input id="loginId" name="id" class="input" type="text" placeholder="For example UMK-M001" autocapitalize="characters" spellcheck="false" required></div>
+                <div class="field"><label for="loginPw">Password</label>
+                  <div class="pw"><input id="loginPw" name="pw" class="input" type="password" placeholder="Your password" required><button class="pw-toggle" type="button" data-act="toggle-pw" aria-label="Show password">Show</button></div>
+                </div>
+              </div>
+              <div class="form-error" id="loginError" role="alert" hidden></div>
+              <button class="btn btn-saffron btn-block" type="submit" id="loginBtn">Open my dashboard</button>
+              <div class="demo-box" id="demoBox" hidden></div>
+            </form>
+          </div>
+          <p class="hero-more"><a href="#how" data-act="scroll" data-target="how">See how it works</a></p>
+          <ul class="hero-points">
+            <li>Each village sees only its own records</li>
+            <li>Monthly and yearly reports as PDF</li>
+            <li>Works on any phone, no app to install</li>
+          </ul>
+        </div>
+
+        <div class="hero-visual" aria-label="Example of a payment being verified">
+          <div class="ledger ledger-back" aria-hidden="true"></div>
+          <div class="ledger">
+            <div class="ledger-head">
+              <div>
+                <div class="ledger-title">Burial levy</div>
+                <div class="ledger-who">Chinedu Okeke, member UMK-M014</div>
+              </div>
+              <div class="ledger-amt">&#8358;5,000</div>
+            </div>
+            <ol class="ledger-steps">
+              <li class="ls ls-1"><span class="ls-dot"></span><div><b>Proof uploaded</b><small>Bank transfer slip, Tue 10:14</small></div></li>
+              <li class="ls ls-2"><span class="ls-dot"></span><div><b>Checked by Ngozi Eze</b><small>Financial Secretary, Tue 16:40</small></div></li>
+              <li class="ls ls-3"><span class="ls-dot"></span><div><b>Ledger updated</b><small>Counted in October's report</small></div></li>
+            </ol>
+            <div class="stamp" aria-hidden="true">Verified</div>
+          </div>
+        </div>
+      </div>
+      <div class="uli" aria-hidden="true"></div>
+    </section>
+
+    <!-- LEVIES -->
+    <section class="section" id="levies">
+      <div class="wrap split">
+        <div class="split-head">
+          <h2>Five levies, each tracked on its own line.</h2>
+          <p>Your union already collects these. VillageVault gives each one its own total, its own history and its own place in the end-of-month report.</p>
+        </div>
+        <dl class="levy-list">
+          <div class="levy-row"><dt><i style="background:#1A1A4E"></i>Annual dues</dt><dd>The yearly membership payment. Members see at once whether they have paid for the year.</dd></div>
+          <div class="levy-row"><dt><i style="background:#D2395B"></i>Burial levy</dt><dd>Collected when a member's family needs the union's support. Totals and payouts sit side by side.</dd></div>
+          <div class="levy-row"><dt><i style="background:#12806A"></i>Life insurance levy</dt><dd>Premium contributions, kept separate so cover can be reconciled at any time.</dd></div>
+          <div class="levy-row"><dt><i style="background:#F5B83D"></i>Party donations</dt><dd>Voluntary gifts for village events, recorded with the donor's name and the amount.</dd></div>
+          <div class="levy-row"><dt><i style="background:#6C5CE7"></i>Support levy</dt><dd>Welfare and project support, with every contribution traceable to a verified payment.</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <!-- HOW IT WORKS (true sequence) -->
+    <section class="section section-tint" id="how">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>From bank slip to balanced books in four steps.</h2>
+          <p>Nothing reaches the ledger until an admin has seen the proof.</p>
+        </div>
+        <ol class="steps">
+          <li><span class="step-n">1</span><h3>Member pays</h3><p>Pay into the union account by transfer, deposit or USSD, and keep the slip or screenshot.</p></li>
+          <li><span class="step-n">2</span><h3>Member uploads proof</h3><p>Choose the levy, enter the amount and reference, and attach the photo or PDF from any phone.</p></li>
+          <li><span class="step-n">3</span><h3>Admin verifies</h3><p>The admin compares the proof with the bank statement, then verifies or rejects with a reason.</p></li>
+          <li><span class="step-n">4</span><h3>Reports build themselves</h3><p>Verified payments flow into the monthly and yearly reports, ready to download as PDF.</p></li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- VILLAGES -->
+    <section class="section" id="villages">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Ten villages. Ten separate ledgers.</h2>
+          <p>Every village signs in with its own details and sees only its own members, payments and reports. Pick your village from the list to open it.</p>
+        </div>
+        <div class="village-grid" id="villageGrid"></div>
+      </div>
+    </section>
+
+    <!-- ACCOUNTABILITY -->
+    <section class="section section-ink" id="accountability">
+      <div class="wrap feature">
+        <div class="feature-copy">
+          <h2>Every change has a name on it.</h2>
+          <p>When an admin verifies a payment, edits a record, adds a member or records spending, VillageVault logs who did it and exactly when. Members and executives can always answer "who changed this?"</p>
+          <ul class="tick-list">
+            <li>Payments are voided with a reason, never silently deleted</li>
+            <li>Each record shows who last updated it and when</li>
+            <li>The full activity log is open to the admin team</li>
+          </ul>
+        </div>
+        <div class="audit-demo" role="img" aria-label="Sample activity log">
+          <div class="audit-row"><span class="audit-t">Tue 16:40</span><span><b>Ngozi Eze</b> verified a burial levy payment of &#8358;5,000 from Chinedu Okeke</span></div>
+          <div class="audit-row"><span class="audit-t">Tue 16:52</span><span><b>Emeka Obi</b> changed the payment date on an annual dues record</span></div>
+          <div class="audit-row"><span class="audit-t">Wed 09:05</span><span><b>Ngozi Eze</b> recorded &#8358;45,000 spent on a burial support payout</span></div>
+          <div class="audit-row"><span class="audit-t">Wed 11:30</span><span><b>Emeka Obi</b> rejected a payment: amount did not match the bank statement</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="wrap feature feature-flip">
+        <div class="report-demo" aria-hidden="true">
+          <div class="rd-head"><b>Monthly Financial Report</b><span>September</span></div>
+          <div class="rd-bars"><i style="--h:46%"></i><i style="--h:72%"></i><i style="--h:38%"></i><i style="--h:88%"></i><i style="--h:60%"></i><i style="--h:94%"></i></div>
+          <div class="rd-lines"><span></span><span></span><span></span><span></span></div>
+          <div class="rd-btn">Download PDF</div>
+        </div>
+        <div class="feature-copy">
+          <h2>Reports are ready the moment the month closes.</h2>
+          <p>Brought-forward balance, income by levy, member contributions, spending and the closing balance, laid out for your general meeting. Every closed month and every year stays available to download.</p>
+          <ul class="tick-list">
+            <li>Members download their own statement</li>
+            <li>Members also see the village's totals and spending</li>
+            <li>Only admins can change figures</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="section section-tint" id="faq">
+      <div class="wrap faq-wrap">
+        <div class="section-head">
+          <h2>Questions unions ask first.</h2>
+        </div>
+        <div class="faq">
+          <details><summary>Can one village see another village's records?</summary><p>No. Each village has its own members, admins and ledger. A signed-in user can only open the village they signed in to.</p></details>
+          <details><summary>Who can change a record?</summary><p>Only admins. Members can upload proof and view records. When an admin verifies or edits anything, their name and the time are saved on the record and in the activity log.</p></details>
+          <details><summary>What if a member uploads the wrong proof?</summary><p>The admin rejects it with a reason, for example "amount does not match". The member sees the reason and uploads again. Rejected payments never count in a report.</p></details>
+          <details><summary>How do the PDF reports work?</summary><p>Open Reports, choose a month or a year and press Download PDF. Every completed month and year is listed so you can download earlier reports at any time.</p></details>
+          <details><summary>Does it work on a phone with a weak signal?</summary><p>Yes. The pages are light, and proof photos are shrunk on the phone before upload so they send quickly.</p></details>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="cta">
+      <div class="wrap cta-in">
+        <h2>Open your village's ledger.</h2>
+        <p>Choose your village, then enter your member or admin ID and password.</p>
+        <button class="btn btn-saffron btn-lg" type="button" data-act="focus-access">Choose your village</button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-in">
+      <div class="brand brand-light">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#F5B83D"/><path d="M16 6l8 5v10l-8 5-8-5V11z" fill="none" stroke="#1A1A4E" stroke-width="2.4"/><circle cx="16" cy="16" r="3" fill="#1A1A4E"/></svg>
+        <span>VillageVault</span>
+      </div>
+      <p>Verified financial records for village unions.</p>
+      <p class="footer-small" id="year"></p>
+    </div>
+  </footer>
+</div>
+
+<!-- ============ ACCESS ============ -->
+<div class="modal-back" id="ownerModal" hidden>
+  <div class="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="ownerTitle">
+    <button class="icon-btn modal-x" type="button" data-act="close-owner" aria-label="Close">&#10005;</button>
+    <h2 id="ownerTitle">Owner access</h2>
+    <form id="ownerForm" autocomplete="off" novalidate>
+      <div class="field"><label for="ownId">Owner ID or email</label><input id="ownId" name="id" class="input" type="text" autocapitalize="characters" spellcheck="false" required></div>
+      <div class="field"><label for="ownPw">Password</label><input id="ownPw" name="pw" class="input" type="password" required></div>
+      <div class="form-error" id="ownerError" role="alert" hidden></div>
+      <button class="btn btn-primary btn-block" type="submit" id="ownerBtn" style="margin-top:18px">Open owner console</button>
+    </form>
+  </div>
+</div>
+
+<!-- ============ SIGNED-IN APP ============ -->
+<div id="app" hidden></div>
+
+<!-- Generic modal + toasts -->
+<div class="modal-back" id="modalRoot" hidden></div>
+<div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+
+<noscript><p style="padding:24px;font-family:sans-serif">VillageVault needs JavaScript turned on to work.</p></noscript>
+<script src="app.js"></script>
+</body>
+</html>
