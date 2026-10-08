@@ -38,6 +38,9 @@ This platform is not a financial institution, is not licensed by the Central Ban
 - A village admin who enters a false record is personally answerable to the Village Union. The audit trail stores the admin's name, action and time.
 - Verification of a member's proof of payment is a decision of the village admin, not of ASSOCIT.
 
+**4A. Optional Device-Native Biometric Login (Bank Pattern)**
+ASSOCIT may offer optional device-native login using WebAuthn passkeys. If enabled by the user, fingerprint or face verification is performed locally on the user's own device by the device operating system. Biometric templates, images, and raw biometric data never leave the user's device, are never transmitted to ASSOCIT, and are never stored on Licensor's servers. ASSOCIT only receives a cryptographic yes/no assertion and stores a public key and credential identifier to validate future assertions. Users may enable or disable this feature at any time and may always use phone and one-time password login as an alternative. Staff multi-factor authentication requirements remain mandatory where applicable.
+
 5. Sponsor billboards and advertising
 The platform shows up to three sponsor cards. Sponsor fees are paid to the platform owner and are part of our income. We are not liable for what a sponsor sells or does.
 
@@ -63,14 +66,17 @@ Each Village Union is the data controller for its member records. [Company Name:
 2. The data we handle
 Members: Name, phone, village, ward, member ID, payment record, receipt image. Admins: Name, log. Village Union: Union name, RC, contact, subscription payment reference. Sponsors: Shop name, logo, WhatsApp. We do not collect bank account numbers, BVN, NIN, card numbers.
 
+**2A. Biometric Login Data**
+We do not collect, process, or store biometric templates, fingerprint images, facial images, or voice prints. Where a user opts to use device-native biometric login via WebAuthn, the biometric verification occurs solely on the user's device. What ASSOCIT stores is limited to a non-biometric public key, credential identifier, and counter for passkey validation, which cannot be used to reconstruct any biometric data.
+
 3. Legal basis and consent
-Members tick consent box. Village legitimate interest also applies.
+Members tick consent box. Village legitimate interest also applies. For optional device-native biometric login, the lawful basis is the user's explicit consent, which may be withdrawn at any time by disabling the feature in account settings or by contacting the Village Union admin, without affecting lawfulness of processing before withdrawal.
 
 4. Who sees the data
 Member sees own, admins see own village only. We do not sell data.
 
 5. How long we keep it
-Payment records 6 years (Village policy). Sponsor/subscription records 6 years.
+Payment records 6 years (Village policy). Sponsor/subscription records 6 years. Passkey public keys are retained until the user deletes them or the account is deactivated, then deleted.
 
 6. Your rights
 Under NDPA you may ask to see, correct, delete, object. Ask village admin first, or write to us, or complain to NDPC.
@@ -90,6 +96,9 @@ This agreement is made on [date:___________________] between [Company Name:_____
 
 1. Service scope
 Licensor grants Licensee a non-exclusive licence to use ASSOCIT as a digital ledger for 6 meetings per year, for recording member payments, issuing receipts, audit trail and reports. Licensor does NOT handle village dues.
+
+**1A. Optional Biometric Login Feature**
+Licensor may provide optional device-native biometric login using WebAuthn passkeys as a convenience feature. Licensee acknowledges that biometric templates remain on end users' devices and are never transmitted to or stored by Licensor. Licensor stores only public keys and credential identifiers. This feature does not constitute processing of Sensitive Personal Data under the NDPA 2023 by Licensor.
 
 2. No funds, no fees on dues
 Members pay Licensee directly offline. Licensor does not collect, hold or guarantee any dues and charges no percentage on dues.
