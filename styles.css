@@ -500,3 +500,21 @@ table.t.edit .input{min-height:42px}
 .b-void{background:#ECEDF3;color:#5B5F7A}
 @media (max-width:640px){.kpis-3{grid-template-columns:1fr}.plogo{width:72px;height:72px}}
 .navlist .count.count-soft{background:var(--nzu-2);color:var(--indigo)}
+
+/* ===== Round 5 additions ===== */
+.lv-list{display:grid;gap:8px;margin-top:6px}
+.lv-row{display:grid;grid-template-columns:auto 1fr minmax(110px,160px);gap:12px;align-items:center;padding:10px 12px;border:1px solid var(--line,#e3e3ee);border-radius:12px;background:#fff;cursor:pointer}
+.lv-row.on{border-color:var(--indigo,#1A1A4E);background:var(--nzu-2,#f3f3fb)}
+.lv-row input[type=checkbox]{width:18px;height:18px;accent-color:var(--indigo,#1A1A4E)}
+.lv-name{display:flex;flex-direction:column;font-weight:600}
+.lv-name small{font-weight:400;color:var(--ink-3,#666);margin-top:2px}
+.lv-amt .input{margin:0}
+.lv-total{display:flex;justify-content:space-between;align-items:center;margin-top:10px;padding:10px 12px;border-radius:12px;background:var(--nzu-2,#f3f3fb)}
+.lv-total b{font-size:1.15rem}
+.plan-cols{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.plan-col{border:1px solid var(--line,#e3e3ee);border-radius:14px;padding:14px}
+.plan-h{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.chip{border:1px solid var(--line,#d6d6e6);background:#fff;border-radius:999px;padding:6px 12px;font:inherit;font-size:.85rem;cursor:pointer}
+.chip:hover{background:var(--nzu-2,#f3f3fb)}
+@media(max-width:640px){.plan-cols{grid-template-columns:1fr}.lv-row{grid-template-columns:auto 1fr;}.lv-amt{grid-column:2}}
