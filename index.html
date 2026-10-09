@@ -30,8 +30,8 @@
         <a href="#faq" data-act="scroll" data-target="faq">Questions</a>
       </nav>
       <div class="nav-right">
-        <label class="sr-only" for="navVillage">Open your village</label>
-        <select id="navVillage" class="select select-nav" data-village-select><option value="" disabled selected>Your village</option></select>
+        <label class="sr-only" for="navVillage">Open your village or association</label>
+        <select id="navVillage" class="select select-nav" data-village-select><option value="" disabled selected>Village or association</option></select>
         <button class="nav-burger" type="button" data-act="toggle-nav" aria-label="Open menu" aria-expanded="false" aria-controls="navLinks">
           <span></span><span></span><span></span>
         </button>
@@ -47,18 +47,20 @@
           <h1>Every naira your village pays, recorded by name.</h1>
           <p class="lead">VillageVault keeps your union's dues, levies and donations in one verified ledger. Members upload proof of payment, an admin checks it, and the books update with that admin's name and a timestamp.</p>
           <div class="access" id="access">
-            <label class="access-label" for="heroVillage">Choose your village</label>
-            <select id="heroVillage" class="select" data-village-select><option value="" disabled selected>Select your village</option></select>
+            <label class="access-label" for="heroVillage">Choose your village/association</label>
+            <select id="heroVillage" class="select" data-village-select><option value="" disabled selected>Select your village or association</option></select>
             <form class="access-step" id="accessForm" autocomplete="off" novalidate hidden>
-              <p class="access-hint" id="accessHint">Enter the ID and password your village admin gave you. Members and admins use the same form and each lands on their own dashboard.</p>
+              <p class="access-hint" id="accessHint">Enter the ID and password your admin gave you. Members and admins use the same form and each lands on their own dashboard. Tick Remember me and choosing your village next time signs you straight in.</p>
               <div class="form-row">
                 <div class="field"><label for="loginId">Member or admin ID</label><input id="loginId" name="id" class="input" type="text" placeholder="For example UMK-M001" autocapitalize="characters" spellcheck="false" required></div>
                 <div class="field"><label for="loginPw">Password</label>
                   <div class="pw"><input id="loginPw" name="pw" class="input" type="password" placeholder="Your password" required><button class="pw-toggle" type="button" data-act="toggle-pw" aria-label="Show password">Show</button></div>
                 </div>
               </div>
+              <label class="check"><input type="checkbox" name="remember" id="remember"> <span>Remember me on this device</span></label>
               <div class="form-error" id="loginError" role="alert" hidden></div>
               <button class="btn btn-saffron btn-block" type="submit" id="loginBtn">Open my dashboard</button>
+              <button class="linkbtn center" type="button" data-act="request-access">First time here? Ask your admin for login details</button>
               <div class="demo-box" id="demoBox" hidden></div>
             </form>
           </div>
@@ -130,7 +132,7 @@
       <div class="wrap">
         <div class="section-head">
           <h2>Ten villages. Ten separate ledgers.</h2>
-          <p>Every village signs in with its own details and sees only its own members, payments and reports. Pick your village from the list to open it.</p>
+          <p>Every village signs in with its own details and sees only its own members, payments and reports. Pick your village or association from the list to open it.</p>
         </div>
         <div class="village-grid" id="villageGrid"></div>
       </div>
@@ -197,8 +199,8 @@
     <section class="cta">
       <div class="wrap cta-in">
         <h2>Open your village's ledger.</h2>
-        <p>Choose your village, then enter your member or admin ID and password.</p>
-        <button class="btn btn-saffron btn-lg" type="button" data-act="focus-access">Choose your village</button>
+        <p>Choose your village or association, then enter your member or admin ID and password.</p>
+        <button class="btn btn-saffron btn-lg" type="button" data-act="focus-access">Choose your village/association</button>
       </div>
     </section>
   </main>
@@ -222,7 +224,7 @@
     <h2 id="ownerTitle">Owner access</h2>
     <form id="ownerForm" autocomplete="off" novalidate>
       <div class="field"><label for="ownId">Owner ID or email</label><input id="ownId" name="id" class="input" type="text" autocapitalize="characters" spellcheck="false" required></div>
-      <div class="field"><label for="ownPw">Password</label><input id="ownPw" name="pw" class="input" type="password" required></div>
+      <div class="field"><label for="ownPw">Password</label><div class="pw"><input id="ownPw" name="pw" class="input" type="password" required><button class="pw-toggle" type="button" data-act="toggle-pw" aria-label="Show password">Show</button></div></div>
       <div class="form-error" id="ownerError" role="alert" hidden></div>
       <button class="btn btn-primary btn-block" type="submit" id="ownerBtn" style="margin-top:18px">Open owner console</button>
     </form>
