@@ -230,10 +230,12 @@ const OWN = {
 };
 // Apply village names changed by the owner or by a village admin, and hide villages the owner removed
 function readPubNames() { try { return JSON.parse(lsGet('vv_names_v1') || '{}'); } catch (_) { return {}; } }
+function readPubCodes() { try { return JSON.parse(lsGet('vv_codes_v1') || '{}'); } catch (_) { return {}; } }
+function setPubCode(id, code) { const p = readPubCodes(); p[id] = code; lsSet('vv_codes_v1', JSON.stringify(p)); }
 function setPubName(id, name) { const p = readPubNames(); p[id] = name; lsSet('vv_names_v1', JSON.stringify(p)); }
 (function applyNameOverrides() {
-  const o = OWN.peek() || {}, pub = readPubNames();
-  VILLAGES.forEach(v => { if (o.names && o.names[v.id]) v.name = o.names[v.id]; if (pub[v.id]) v.name = pub[v.id]; if (o.removed && o.removed[v.id]) v.removed = true; });
+  const o = OWN.peek() || {}, pub = readPubNames(), pc = readPubCodes();
+  VILLAGES.forEach(v => { if (o.names && o.names[v.id]) v.name = o.names[v.id]; if (pub[v.id]) v.name = pub[v.id]; if (pc[v.id]) v.code = pc[v.id]; if (o.removed && o.removed[v.id]) v.removed = true; });
 })();
 
 /* ---------- App state ---------- */
@@ -531,6 +533,7 @@ function donut(parts) {
 const kpiLink = (act, l, v, s, tone, extra) => `<button type="button" class="kpi click ${tone || ''}" data-act="${act}"${extra || ''}><div class="kpi-l">${l}</div><div class="kpi-v">${v}</div>${s ? `<div class="kpi-s">${s}</div>` : ''}<span class="kpi-go" aria-hidden="true">View details &rsaquo;</span></button>`;
 const kpi = (l, v, s, tone) => `<div class="kpi ${tone || ''}"><div class="kpi-l">${l}</div><div class="kpi-v">${v}</div>${s ? `<div class="kpi-s">${s}</div>` : ''}</div>`;
 function csvDownload(name, rows) {
+  if (S.v && S.v.plan === 'premium') rows = [[`${S.v.name} (${S.v.code})`], []].concat(rows);
   const txt = rows.map(r => r.map(c => `"${String(c == null ? '' : c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
   download(name, new Blob(['﻿' + txt], { type: 'text/csv;charset=utf-8' }));
 }
@@ -552,7 +555,7 @@ function buildReport(kind, year, month, memberId) {
   const byLevy = levyAll().filter(l => !l.removed || inR.some(t => t.levy === l.id)).map(l => { const a = inR.filter(t => t.levy === l.id); return { id: l.id, name: l.name, color: l.color, count: a.length, amount: sum(a) }; });
   const pend = pendingTx().filter(t => !memberId || t.memberId === memberId);
   const rep = {
-    kind, year, month, memberId, start, end, periodLabel, village: v.name,
+    kind, year, month, memberId, start, end, periodLabel, village: v.name, code: v.code, premium: v.plan === 'premium', logo: v.logo || null,
     mode: memberId ? 'statement' : 'village',
     docTitle: memberId ? (kind === 'month' ? 'Member Monthly Statement' : 'Member Yearly Statement') : (kind === 'month' ? 'Monthly Financial Report' : 'Yearly Financial Report'),
     ref: `VR-${v.code}-${year}${kind === 'month' ? mm : ''}${memberId ? '-' + memberId : ''}`,
@@ -623,12 +626,13 @@ function reportPdf(rep) {
   const pdf = new PDF(), M = 40, CW = pdf.W - 80, INK = '#14142B', MUT = '#5B5F7A';
   let y = 0;
   pdf.rect(0, 0, pdf.W, 118, '#1A1A4E'); pdf.rect(0, 118, pdf.W, 5, '#F5B83D');
-  pdf.text('VillageVault', M, 38, { size: 10, bold: true, color: '#F5B83D' });
+  pdf.text(rep.premium ? pdf.fit(`${rep.village} (${rep.code})`, CW - 150, 10, true) : 'VillageVault', M, 38, { size: 10, bold: true, color: '#F5B83D' });
+  if (rep.premium && rep.logo) pdf.img(rep.logo, pdf.W - M - 50, 52, 50, 50);
   pdf.text(rep.ref, pdf.W - M, 38, { size: 9, color: '#DADCF5', align: 'right' });
   pdf.text(rep.docTitle, M, 70, { size: 22, bold: true, color: '#FFFFFF' });
   pdf.text(`${rep.village} Village Union, ${rep.periodLabel}${rep.memberName ? ', ' + rep.memberName : ''}`, M, 94, { size: 12, color: '#DADCF5' });
   y = 148;
-  const newPage = () => { pdf.add(); pdf.rect(0, 0, pdf.W, 26, '#1A1A4E'); pdf.text(`VillageVault | ${rep.village} | ${rep.docTitle} | ${rep.periodLabel}`, M, 17, { size: 8, color: '#DADCF5' }); y = 52; };
+  const newPage = () => { pdf.add(); pdf.rect(0, 0, pdf.W, 26, '#1A1A4E'); pdf.text(`${rep.premium ? rep.village + ' (' + rep.code + ')' : 'VillageVault | ' + rep.village} | ${rep.docTitle} | ${rep.periodLabel}`, M, 17, { size: 8, color: '#DADCF5' }); y = 52; };
   const ensure = h => { if (y + h > pdf.H - 56) newPage(); };
   const title = t => { ensure(60); pdf.text(t, M, y + 4, { size: 12.5, bold: true, color: '#1A1A4E' }); y += 14; pdf.line(M, y, M + CW, y, '#1A1A4E', 1); y += 6; };
   const tbl = (cols, rows, opt) => {
@@ -706,10 +710,10 @@ function downloadReport(kind, year, month, memberId) {
 /* ---------- Shell and navigation ---------- */
 const NAV = {
   member: [['overview', 'My dashboard', 'home'], ['village', 'Village dashboard', 'village']],
-  admin: [['overview', 'Overview', 'home'], ['verify', 'Verify payments', 'check'], ['transactions', 'Transactions', 'list'], ['outstanding', 'Outstanding bills', 'coin'], ['pledges', 'Pledges', 'coin'], ['members', 'Members', 'users'], ['register', 'Register', 'book'], ['expenses', 'Expenditure', 'coin'], ['levies', 'Levy categories', 'sliders'], ['profile', 'Village profile', 'village'], ['reports', 'Reports', 'file'], ['audit', 'Activity log', 'clock']],
+  admin: [['overview', 'Overview', 'home'], ['verify', 'Verify payments', 'check'], ['transactions', 'Transactions', 'list'], ['outstanding', 'Outstanding bills', 'coin'], ['pledges', 'Pledges', 'coin'], ['members', 'Members', 'users'], ['admins', 'Admins and duties', 'users'], ['register', 'Register', 'book'], ['expenses', 'Expenditure', 'coin'], ['levies', 'Levy categories', 'sliders'], ['profile', 'Village profile', 'village'], ['reports', 'Reports', 'file'], ['audit', 'Activity log', 'clock']],
   owner: [['o-overview', 'All villages', 'home'], ['o-villages', 'Manage villages', 'village'], ['o-admins', 'Village admins', 'users'], ['o-sponsors', 'Sponsors', 'coin'], ['o-log', 'Owner activity', 'clock'], ['o-account', 'My account', 'user']]
 };
-const TITLES = { overview: 'Overview', village: 'Village dashboard', reports: 'Reports', verify: 'Verify payments', transactions: 'Transactions', members: 'Members', expenses: 'Expenditure', levies: 'Levy categories', outstanding: 'Outstanding bills', pledges: 'Pledges', register: 'Register', profile: 'Village profile', audit: 'Activity log', 'o-overview': 'All villages', 'o-villages': 'Manage villages', 'o-admins': 'Village admins', 'o-sponsors': 'Sponsors', 'o-log': 'Owner activity', 'o-account': 'My account' };
+const TITLES = { overview: 'Overview', village: 'Village dashboard', reports: 'Reports', verify: 'Verify payments', transactions: 'Transactions', members: 'Members', expenses: 'Expenditure', levies: 'Levy categories', outstanding: 'Outstanding bills', pledges: 'Pledges', admins: 'Admins and duties', register: 'Register', profile: 'Village profile', audit: 'Activity log', 'o-overview': 'All villages', 'o-villages': 'Manage villages', 'o-admins': 'Village admins', 'o-sponsors': 'Sponsors', 'o-log': 'Owner activity', 'o-account': 'My account' };
 const inOwnerConsole = () => S.owner && !S.v;
 const roleKey = () => inOwnerConsole() ? 'owner' : (isAdmin() ? 'admin' : 'member');
 function pageTitleText() {
@@ -1759,6 +1763,12 @@ Object.assign(API, {
   saveBranding(d) {
     requireAdmin(); const ch = [];
     if (d.name && d.name !== S.v.name) { ch.push(`Name: ${S.v.name} to ${d.name}`); S.v.name = d.name; const vil = VILLAGES.find(x => x.id === S.v.id); if (vil) vil.name = d.name; setPubName(S.v.id, d.name); }
+    if (d.code && d.code !== S.v.code) {
+      if (S.v.plan !== 'premium') throw new Error('Changing the village code is part of the Premium plan.');
+      if (!/^[A-Z0-9]{2,5}$/.test(d.code)) throw new Error('The code must be 2 to 5 letters or numbers.');
+      if (VILLAGES.some(x => x.id !== S.v.id && x.code === d.code)) throw new Error('Another village already uses that code.');
+      ch.push(`Code: ${S.v.code} to ${d.code}`); S.v.code = d.code; const vl = VILLAGES.find(x => x.id === S.v.id); if (vl) vl.code = d.code; setPubCode(S.v.id, d.code);
+    }
     if (d.logo) { ch.push('Logo updated'); S.v.logo = d.logo; }
     if (d.removeLogo && S.v.logo && !d.logo) { ch.push('Logo removed'); S.v.logo = null; }
     if (!ch.length) throw new Error('Nothing was changed.');
@@ -1816,19 +1826,19 @@ ACTIONS['edit-accounts'] = function () {
 /* ---------- Village profile: logo, name, plan ---------- */
 ADMIN.profile = function () {
   const prem = S.v.plan === 'premium', vil = VILLAGES.find(x => x.id === S.v.id);
-  return `<section class="panel"><div class="panel-h"><div><h2>Village profile</h2><p>Your name and logo show on the sidebar${prem ? ' and on every receipt you issue' : ''}.</p></div><button class="btn btn-primary btn-sm" type="button" data-act="edit-profile">Edit name and logo</button></div>
+  return `<section class="panel"><div class="panel-h"><div><h2>Village profile</h2><p>Your name and logo show on the sidebar${prem ? ' and on every receipt, report, statement, notice and export you issue' : ''}.</p></div><button class="btn btn-primary btn-sm" type="button" data-act="edit-profile">${prem ? 'Edit name, code and logo' : 'Edit name and logo'}</button></div>
     <div class="profile-row">${S.v.logo ? `<img class="plogo" src="${esc(S.v.logo)}" alt="Village logo">` : `<div class="plogo ph" style="background:${vil.color}">${esc(vil.code)}</div>`}
-    <dl class="kv"><dt>Name</dt><dd>${esc(S.v.name)}</dd><dt>Code</dt><dd>${esc(S.v.code)}</dd><dt>Plan</dt><dd>${prem ? '<span class="badge b-admin">Premium</span>' : '<span class="badge b-off">Basic</span>'}</dd><dt>Receipts</dt><dd>${prem ? 'Bear the village name and logo' : 'Carry the VillageVault name only'}</dd></dl></div>
+    <dl class="kv"><dt>Name</dt><dd>${esc(S.v.name)}</dd><dt>Code</dt><dd>${esc(S.v.code)}</dd><dt>Plan</dt><dd>${prem ? '<span class="badge b-admin">Premium</span>' : '<span class="badge b-off">Basic</span>'}</dd><dt>Documents</dt><dd>${prem ? 'Every receipt, report, statement, notice and export bears the village name, code and logo' : 'Carry the VillageVault name only'}</dd></dl></div>
     ${prem ? '' : '<div class="callout" style="margin-top:16px"><div><b>Want receipts with your village name and logo?</b><p>Ask VillageVault support to move your village to the Premium plan.</p></div></div>'}</section>
   ${paymentPanel()}`;
 };
 ACTIONS['edit-profile'] = function () {
   requireAdmin();
-  openModal({ title: 'Edit name and logo', sub: 'Changes show to every member straight away.',
-    body: `<div class="field"><label for="vpN">Village or association name</label><input id="vpN" name="name" class="input" maxlength="40" value="${esc(S.v.name)}" required></div>${fileField('Logo', 'logo')}${S.v.logo ? '<label class="check"><input type="checkbox" name="removeLogo"> <span>Remove the current logo</span></label>' : ''}`, submit: 'Save profile',
+  openModal({ title: S.v.plan === 'premium' ? 'Edit name, code and logo' : 'Edit name and logo', sub: 'Changes show to every member straight away.',
+    body: `<div class="field"><label for="vpN">Village or association name</label><input id="vpN" name="name" class="input" maxlength="40" value="${esc(S.v.name)}" required></div>${S.v.plan === 'premium' ? `<div class="field"><label for="vpC">Village code</label><input id="vpC" name="code" class="input mono" maxlength="5" value="${esc(S.v.code)}" style="text-transform:uppercase" required><span class="hint">2 to 5 letters or numbers. It appears on records, receipts and reports. Existing member IDs and login IDs do not change.</span></div>` : ''}${fileField('Logo', 'logo')}${S.v.logo ? '<label class="check"><input type="checkbox" name="removeLogo"> <span>Remove the current logo</span></label>' : ''}`, submit: 'Save profile',
     onSubmit: async fd => {
       const n = (fd.get('name') || '').trim(); if (n.length < 2) throw new Error('Enter the village or association name.');
-      const logo = await readLogo(fd.get('proof')); API.saveBranding({ name: n, logo, removeLogo: !!fd.get('removeLogo') }); fillVillageSelects(); renderApp(); closeModal(); toast('Profile saved.', 'ok');
+      const logo = await readLogo(fd.get('proof')); API.saveBranding({ name: n, code: fd.get('code') ? String(fd.get('code')).trim().toUpperCase() : '', logo, removeLogo: !!fd.get('removeLogo') }); fillVillageSelects(); renderApp(); closeModal(); toast('Profile saved.', 'ok');
     } });
 };
 
@@ -1885,10 +1895,10 @@ function drawNotice(pdf, it, yr) {
   const M = 48, CW = pdf.W - 96, INK = '#14142B', MUT = '#5B5F7A', u = it.u, acc = S.v.settings.accounts || []; let y = 0;
   const ensure = h => { if (y + h > pdf.H - 56) { pdf.add(); y = 60; } };
   pdf.rect(0, 0, pdf.W, 104, '#1A1A4E'); pdf.rect(0, 104, pdf.W, 5, '#F5B83D');
-  if (S.v.logo) pdf.img(S.v.logo, pdf.W - M - 52, 26, 52, 52);
+  const prem = S.v.plan === 'premium'; if (prem && S.v.logo) pdf.img(S.v.logo, pdf.W - M - 52, 26, 52, 52);
   pdf.text(pdf.fit(S.v.name, CW - 70, 20, true), M, 48, { size: 20, bold: true, color: '#FFFFFF' });
   pdf.text('OUTSTANDING PAYMENT NOTICE', M, 74, { size: 11, bold: true, color: '#F5B83D' });
-  pdf.text('Records kept on VillageVault', M, 92, { size: 8, color: '#C9CBEA' });
+  pdf.text(prem ? `Village code: ${S.v.code}` : 'Records kept on VillageVault', M, 92, { size: 8, color: '#C9CBEA' });
   y = 140; pdf.text(`Notice NT-${S.v.code}-${yr}-${u.id}`, M, y, { size: 9, color: MUT }); pdf.text(`Date: ${fmtDate(today())}`, pdf.W - M, y, { size: 9, color: MUT, align: 'right' });
   y += 28; pdf.text('To', M, y, { size: 9, color: MUT }); y += 17; pdf.text(pdf.fit(u.name, CW, 15, true), M, y, { size: 15, bold: true, color: '#1A1A4E' });
   y += 16; pdf.text(`${u.id}   |   ${u.ward}${u.phone ? '   |   ' + u.phone : ''}`, M, y, { size: 10, color: MUT });
@@ -2066,7 +2076,7 @@ function activityFeed() {
   <div class="list">${list.map(a => `<div class="list-item"><div><b>${esc(a.action)}</b><small>${esc(a.detail)}</small><small>${esc(a.adminName)}${a.adminTitle ? ', ' + esc(a.adminTitle) : ''} on ${esc(fmtTS(a.ts))}</small></div></div>`).join('') || '<div class="empty"><b>No activity yet</b></div>'}</div></section>`;
 }
 Object.assign(ACTIONS, {
-  'att-mark-admin'(el) { requireAdmin(); API.markAttendance(); toast('Marked. Another admin must verify your attendance.', 'ok'); mtgView(el.dataset.id); renderSoon(); },
+  'att-mark-admin'(el) { requireAdmin(); API.markAttendance(); toast('Marked. Another admin must verify your attendance.', 'ok'); if ($('#modalRoot').hidden) renderView(); else { mtgView(el.dataset.id); renderSoon(); } },
   'att-mark'() { API.markAttendance(); toast('Attendance marked. Your admin will verify it.', 'ok'); renderView(); },
   'view-register'(el) {
     const m = S.v.meetings.find(x => x.id === el.dataset.id); if (!m) return;
@@ -2088,17 +2098,17 @@ VIEWS.admin.register = ADMIN.register; VIEWS.admin.profile = ADMIN.profile; VIEW
 function regAttendance() {
   const open = S.v.meetings.find(meetingOpen), list = meetingsDesc();
   const banner = open
-    ? `<section class="panel att-open"><div class="panel-h"><div><span class="badge b-verified">Register open today</span><h2 style="margin-top:8px">${esc(open.title)}</h2><p>${esc(fmtDate(open.date))}. Members can mark themselves present until you close it or midnight. ${presentCount(open)} verified, ${open.marks.filter(k => k.status === 'pending').length} waiting for you.</p></div><div class="btn-row"><button class="btn btn-primary" type="button" data-act="mtg-view" data-id="${esc(open.id)}">Open the register</button><button class="btn btn-ghost" type="button" data-act="mtg-close" data-id="${esc(open.id)}">Close register</button></div></div></section>`
+    ? `<section class="panel att-open"><div class="panel-h"><div><span class="badge b-verified">Register open today</span><h2 style="margin-top:8px">${esc(open.title)}</h2><p>${esc(fmtDate(open.date))}. Members can mark themselves present until you close it or midnight. ${presentCount(open)} verified, ${open.marks.filter(k => k.status === 'pending').length} waiting for you.</p></div><div class="btn-row"><button class="btn btn-primary" type="button" data-act="mtg-view" data-id="${esc(open.id)}">Open the register</button>${!open.marks.some(k => k.memberId === S.u.id) && S.u.id !== 'SUPPORT' && !S.owner ? `<button class="btn btn-leaf" type="button" data-act="att-mark-admin" data-id="${esc(open.id)}">Mark me present</button>` : ''}<button class="btn btn-ghost" type="button" data-act="mtg-close" data-id="${esc(open.id)}">Close register</button></div></div></section>`
     : `<section class="panel"><div class="panel-h"><div><h2>No register is open</h2><p>Open it on meeting day only. It accepts attendance for today, so nobody can sign for a past meeting.</p></div><button class="btn btn-primary" type="button" data-act="mtg-open">Open today's register</button></div></section>`;
   return `${banner}<section class="panel"><div class="panel-h"><div><h2>Meetings</h2><p>Open a meeting to verify names, or to click a member and see their payments and attendance.</p></div></div>
   ${table(['Date', 'Meeting', { t: 'Present', num: true }, { t: 'Waiting', num: true }, 'Status', 'Opened by', ''], list.map(m => [esc(fmtDate(m.date)), esc(m.title), String(presentCount(m)), String(m.marks.filter(k => k.status === 'pending').length), meetingOpen(m) ? '<span class="badge b-verified">Open today</span>' : '<span class="badge b-off">Closed</span>', `${esc(m.openedBy)}<small>${esc(fmtTS(m.openedAt))}</small>`, `<button class="btn btn-ghost btn-sm" type="button" data-act="mtg-view" data-id="${esc(m.id)}">Open</button>`]), ['No meetings yet', 'Open a register on your next meeting day.']).replace(/<td class="num">(<button)/g, '<td>$1')}</section>`;
 }
 function regMembers() {
   const f = S.f, yr = new Date().getFullYear(), q = (f.q || '').toLowerCase();
-  const list = S.v.users.filter(u => u.role === 'member' && (!f.ward || u.ward === f.ward) && (!q || u.name.toLowerCase().includes(q) || u.id.toLowerCase().includes(q))).sort((a, b) => a.name.localeCompare(b.name)), page = paginate(list, f);
+  const list = S.v.users.filter(u => (u.role === 'member' || u.role === 'admin') && (!f.ward || u.ward === f.ward) && (!q || u.name.toLowerCase().includes(q) || u.id.toLowerCase().includes(q))).sort((a, b) => (a.role === 'admin' ? 0 : 1) - (b.role === 'admin' ? 0 : 1) || a.name.localeCompare(b.name)), page = paginate(list, f);
   return `<section class="panel"><div class="panel-h"><div><h2>Member register</h2><p>Click a name to see that member's attendance and payment history.</p></div><button class="btn btn-ghost btn-sm" type="button" data-act="register-csv">Download register (CSV)</button></div>
   <div class="toolbar"><div class="field grow2"><label for="fq">Search</label><input id="fq" class="input" type="search" data-filter="q" value="${esc(f.q || '')}" placeholder="Name or ID"></div><div class="field"><label for="fw">Ward</label><select id="fw" class="select" data-filter="ward">${wardOpts(f.ward, 'All wards')}</select></div></div>
-  ${table(['Member', 'Ward', 'Phone', { t: 'Attendance', num: true }, { t: 'Paid ' + yr, num: true }, { t: 'Owes', num: true }, 'Account'], page.map(u => { const a = attendanceOf(u.id), o = memberOutstanding(u.id, yr); return [`${linkBtn('member-profile', u.id, u.name)}<small>${esc(u.id)}</small>`, esc(u.ward), esc(u.phone || '-'), a.total ? `${a.present} of ${a.total}` : '-', money(sum(memberPaid(u.id, yr))), o ? `<b style="color:var(--hibiscus)">${money(o)}</b>` : 'Nil', u.active ? '<span class="badge b-active">Active</span>' : '<span class="badge b-off">Deactivated</span>']; }), ['No members match', 'Try a different filter.'])}${pager(list.length, f.page, CONFIG.PER_PAGE)}</section>`;
+  ${table(['Member', 'Ward', 'Phone', { t: 'Attendance', num: true }, { t: 'Paid ' + yr, num: true }, { t: 'Owes', num: true }, 'Account'], page.map(u => { const a = attendanceOf(u.id), o = memberOutstanding(u.id, yr); return [`${linkBtn('member-profile', u.id, u.name)}<small>${esc(u.id)}${u.role === 'admin' ? ' · ' + esc(u.title || 'Admin') : ''}</small>`, esc(u.ward), esc(u.phone || '-'), a.total ? `${a.present} of ${a.total}` : '-', money(sum(memberPaid(u.id, yr))), o ? `<b style="color:var(--hibiscus)">${money(o)}</b>` : 'Nil', u.active ? '<span class="badge b-active">Active</span>' : '<span class="badge b-off">Deactivated</span>']; }), ['No members match', 'Try a different filter.'])}${pager(list.length, f.page, CONFIG.PER_PAGE)}</section>`;
 }
 function regLogins() {
   const f = S.f, q = (f.q || '').toLowerCase();
@@ -2388,6 +2398,58 @@ function plansPanel(rows) {
   const col = (p, label, note) => { const l = by(p); return `<div class="plan-col"><div class="plan-h">${planBadge({ plan: p })}<b>${l.length}</b> ${l.length === 1 ? 'village' : 'villages'}</div><p class="hint">${note}</p><div class="chips">${l.length ? l.map(r => `<button type="button" class="chip" data-act="owner-manage" data-id="${esc(r.vil.id)}">${esc(r.v.name)}</button>`).join('') : '<span class="hint">None</span>'}</div></div>`; };
   return `<section class="panel"><div class="panel-h"><div><h2>Plans in use</h2><p>Which package each village or association runs on. Click a name to change its plan.</p></div></div><div class="plan-cols">${col('premium', 'Premium', 'Receipts carry the village name and logo.')}${col('basic', 'Basic', 'Standard receipts.')}</div></section>`;
 }
+/* =========================================================
+   ROUND 6: Admin-01 assigns and removes admin duties
+   ========================================================= */
+const isAdmin01 = () => !!S.u && (S.owner || (S.u.role === 'admin' && /-A01$/.test(S.u.id)));
+const requireAdmin01 = () => { requireAdmin(); if (!isAdmin01()) throw new Error('Only Admin-01 can assign or remove admin duties.'); };
+const adminLead = u => /-A01$/.test(u.id);
+Object.assign(API, {
+  appointAdmin(memberId, title) {
+    requireAdmin01(); requireWritable(); const u = userById(memberId);
+    if (!u || u.role !== 'member' || !u.active) throw new Error('Choose an active member to appoint.');
+    if (!ADMIN_TITLES.includes(title)) throw new Error('Choose a duty.');
+    u.role = 'admin'; u.title = title; log('Appointed admin', u.id, `${u.name} now serves as ${title}`); commit(); return u;
+  },
+  assignDuty(adminId, title) {
+    requireAdmin01(); requireWritable(); const u = userById(adminId);
+    if (!u || u.role !== 'admin') throw new Error('Admin not found.'); if (!ADMIN_TITLES.includes(title)) throw new Error('Choose a duty.');
+    if (u.title === title) throw new Error('That is already their duty.');
+    const was = u.title; u.title = title; log('Changed admin duty', u.id, `${u.name}: ${was} to ${title}`); commit(); return u;
+  },
+  removeAdmin(adminId, reason) {
+    requireAdmin01(); requireWritable(); const u = userById(adminId);
+    if (!u || u.role !== 'admin') throw new Error('Admin not found.'); if (adminLead(u)) throw new Error('Admin-01 cannot be removed here. Contact support to change the lead admin.');
+    if (S.v.users.filter(x => x.role === 'admin' && x.active).length < 2) throw new Error('A village must keep at least one admin.');
+    const was = u.title; u.role = 'member'; u.title = ''; u.rememberTokens = []; log('Removed admin duties', u.id, `${u.name} (${was}) is now an ordinary member: ${reason}`); commit(); return u;
+  }
+});
+ADMIN.admins = function () {
+  const lead = isAdmin01(), admins = S.v.users.filter(u => u.role === 'admin').sort((a, b) => a.id.localeCompare(b.id));
+  return `<section class="panel"><div class="panel-h"><div><h2>Admins and duties</h2><p>${lead ? 'As Admin-01 you decide who serves as an admin and what their duty is.' : 'Only Admin-01 can appoint admins, change duties or remove them. Everyone can see who serves.'}</p></div>${lead ? '<button class="btn btn-primary btn-sm" type="button" data-act="appoint-admin">Appoint an admin</button>' : ''}</div>
+  ${table(['Admin', 'Duty', 'Phone', 'Account', ''], admins.map(u => [`${linkBtn('member-profile', u.id, u.name)}<small>${esc(u.id)}${adminLead(u) ? ' · Admin-01, lead admin' : ''}</small>`, esc(u.title || 'Admin'), esc(u.phone || '-'), u.active ? '<span class="badge b-active">Active</span>' : '<span class="badge b-off">Deactivated</span>',
+    lead ? `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="assign-duty" data-id="${esc(u.id)}">Change duty</button>${adminLead(u) ? '' : `<button class="btn btn-ghost btn-sm" type="button" data-act="remove-admin" data-id="${esc(u.id)}">Remove</button>`}</div>` : '']), ['No admins', ''])}</section>`;
+};
+VIEWS.admin.admins = ADMIN.admins;
+const dutyOpts = sel => ADMIN_TITLES.map(t => opt(t, t, sel)).join('');
+Object.assign(ACTIONS, {
+  'appoint-admin'() {
+    requireAdmin01(); const members = S.v.users.filter(u => u.role === 'member' && u.active).sort((a, b) => a.name.localeCompare(b.name));
+    openModal({ title: 'Appoint an admin', sub: 'The member keeps their own login and gains admin access. Every action they take is named in the activity log.',
+      body: `<div class="field"><label for="apM">Member</label><select id="apM" name="member" class="select" required>${opt('', 'Choose a member', '')}${members.map(u => opt(u.id, `${u.name} (${u.id})`, '')).join('')}</select></div><div class="field"><label for="apT">Duty</label><select id="apT" name="title" class="select">${dutyOpts('Secretary')}</select></div>`, submit: 'Appoint admin',
+      onSubmit: fd => { if (!fd.get('member')) throw new Error('Choose the member.'); const u = API.appointAdmin(fd.get('member'), fd.get('title')); done(`${u.name} is now an admin.`); } });
+  },
+  'assign-duty'(el) {
+    requireAdmin01(); const u = userById(el.dataset.id);
+    openModal({ title: 'Change duty', sub: `${esc(u.name)}, now ${esc(u.title || 'Admin')}.`, body: `<div class="field"><label for="adT">New duty</label><select id="adT" name="title" class="select">${dutyOpts(u.title)}</select></div>`, submit: 'Save duty',
+      onSubmit: fd => { API.assignDuty(u.id, fd.get('title')); done('Duty updated.'); } });
+  },
+  'remove-admin'(el) {
+    requireAdmin01(); const u = userById(el.dataset.id);
+    openModal({ title: 'Remove admin duties?', danger: true, sub: `${esc(u.name)} stays a member and keeps their login, but can no longer verify, edit or record anything.`, body: `<div class="field"><label for="raR">Reason</label><textarea id="raR" name="reason" class="textarea" maxlength="200" required></textarea></div>`, submit: 'Remove admin duties',
+      onSubmit: fd => { const r = (fd.get('reason') || '').trim(); if (r.length < 3) throw new Error('Give a short reason.'); API.removeAdmin(u.id, r); done('Admin duties removed.'); } });
+  }
+});
 
 /* ---------- Keep open tabs in step: when another tab (for example the admin verifying a payment) saves
    a village, this tab picks up the change by itself ---------- */
@@ -2395,7 +2457,7 @@ window.addEventListener('storage', e => {
   if (!e.key || e.key.indexOf('vv_v1_') !== 0 || !e.newValue) return;
   try {
     const id = e.key.slice(6), d = JSON.parse(e.newValue); migrate(d); DB.cache[id] = d;
-    if (S.v && S.v.id === id) { S.v = d; if (S.u && S.u.id !== 'SUPPORT') { const nu = d.users.find(x => x.id === S.u.id); if (nu) S.u = nu; } if ($('#modalRoot').hidden) renderSoon(); }
+    if (S.v && S.v.id === id) { S.v = d; if (S.u && S.u.id !== 'SUPPORT') { const nu = d.users.find(x => x.id === S.u.id); if (nu) { if (nu.role !== S.u.role) S.page = 'overview'; S.u = nu; } } if ($('#modalRoot').hidden) renderSoon(); }
   } catch (_) {}
 });
 
