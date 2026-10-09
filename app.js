@@ -175,6 +175,7 @@ const PALETTE = ['#1A1A4E', '#D2395B', '#12806A', '#F5B83D', '#6C5CE7', '#0E7490
 const BANKS = ['First Bank of Nigeria', 'Guaranty Trust Bank', 'Access Bank', 'United Bank for Africa', 'Zenith Bank', 'Fidelity Bank'];
 function migrate(v) {
   v.settings = v.settings || { levies: {} }; v.settings.levies = v.settings.levies || {};
+  v.pledges = v.pledges || [];
   if (!v.levyList) v.levyList = LEVIES.map(l => ({ id: l.id, name: l.name, fixed: l.fixed, color: l.color }));
   v.levyList.forEach(l => { if (v.settings.levies[l.id] == null) v.settings.levies[l.id] = 0; });
   const R = rng(v.id + 'mig');
@@ -705,10 +706,10 @@ function downloadReport(kind, year, month, memberId) {
 /* ---------- Shell and navigation ---------- */
 const NAV = {
   member: [['overview', 'My dashboard', 'home'], ['village', 'Village dashboard', 'village']],
-  admin: [['overview', 'Overview', 'home'], ['verify', 'Verify payments', 'check'], ['transactions', 'Transactions', 'list'], ['outstanding', 'Outstanding bills', 'coin'], ['members', 'Members', 'users'], ['register', 'Register', 'book'], ['expenses', 'Expenditure', 'coin'], ['levies', 'Levy categories', 'sliders'], ['profile', 'Village profile', 'village'], ['reports', 'Reports', 'file'], ['audit', 'Activity log', 'clock']],
+  admin: [['overview', 'Overview', 'home'], ['verify', 'Verify payments', 'check'], ['transactions', 'Transactions', 'list'], ['outstanding', 'Outstanding bills', 'coin'], ['pledges', 'Pledges', 'coin'], ['members', 'Members', 'users'], ['register', 'Register', 'book'], ['expenses', 'Expenditure', 'coin'], ['levies', 'Levy categories', 'sliders'], ['profile', 'Village profile', 'village'], ['reports', 'Reports', 'file'], ['audit', 'Activity log', 'clock']],
   owner: [['o-overview', 'All villages', 'home'], ['o-villages', 'Manage villages', 'village'], ['o-admins', 'Village admins', 'users'], ['o-sponsors', 'Sponsors', 'coin'], ['o-log', 'Owner activity', 'clock'], ['o-account', 'My account', 'user']]
 };
-const TITLES = { overview: 'Overview', village: 'Village dashboard', reports: 'Reports', verify: 'Verify payments', transactions: 'Transactions', members: 'Members', expenses: 'Expenditure', levies: 'Levy categories', outstanding: 'Outstanding bills', register: 'Register', profile: 'Village profile', audit: 'Activity log', 'o-overview': 'All villages', 'o-villages': 'Manage villages', 'o-admins': 'Village admins', 'o-sponsors': 'Sponsors', 'o-log': 'Owner activity', 'o-account': 'My account' };
+const TITLES = { overview: 'Overview', village: 'Village dashboard', reports: 'Reports', verify: 'Verify payments', transactions: 'Transactions', members: 'Members', expenses: 'Expenditure', levies: 'Levy categories', outstanding: 'Outstanding bills', pledges: 'Pledges', register: 'Register', profile: 'Village profile', audit: 'Activity log', 'o-overview': 'All villages', 'o-villages': 'Manage villages', 'o-admins': 'Village admins', 'o-sponsors': 'Sponsors', 'o-log': 'Owner activity', 'o-account': 'My account' };
 const inOwnerConsole = () => S.owner && !S.v;
 const roleKey = () => inOwnerConsole() ? 'owner' : (isAdmin() ? 'admin' : 'member');
 function pageTitleText() {
@@ -792,7 +793,7 @@ function txDetail(id) {
       ${t.rejectReason ? `<dt>Reason</dt><dd>${esc(t.rejectReason)}</dd>` : ''}${t.voidReason ? `<dt>Voided</dt><dd>${esc(t.voidedBy)}, ${esc(fmtTS(t.voidedAt))}: ${esc(t.voidReason)}</dd>` : ''}
       ${t.note ? `<dt>Note</dt><dd>${esc(t.note)}</dd>` : ''}
       ${t.updatedBy ? `<dt>Last updated</dt><dd>${esc(t.updatedBy)}, ${esc(fmtTS(t.updatedAt))}</dd>` : ''}</dl>
-      <div><div class="lbl" style="margin-bottom:6px">Proof of payment</div>${proofHTML(t.proof)}</div></div>
+      <div><div class="lbl" style="margin-bottom:6px">Proof of payment</div>${proofHTML(proofOf(t))}</div></div>
       ${adm && t.status === 'verified' ? `<div style="margin-top:14px"><button type="button" class="btn btn-saffron btn-sm" data-act="receipt" data-id="${t.id}">${t.receiptNo ? 'Open receipt ' + esc(t.receiptNo) : 'Generate receipt'}</button></div>` : ''}
       ${hist ? `<div class="sec-title">History</div><ul class="timeline">${hist}</ul>` : ''}`
   });
@@ -812,6 +813,7 @@ const MEMBER = {
       <div class="progress-list">${rows.map(r => { const pc = r.need ? Math.min(100, r.p / r.need * 100) : 0; return `<div><div class="prog-top"><b>${esc(r.L.name)}</b><span>${r.L.fixed ? `${money(r.p)} of ${money(r.need)}` : `${money(r.p)} given`}</span></div><div class="bar"><i style="width:${r.L.fixed ? pc : (r.p ? 100 : 0)}%;--c:${r.L.color}"></i></div></div>`; }).join('')}</div></section>
     <section class="panel"><div class="panel-h"><h2>Recent activity</h2></div><div class="list">${mine.slice().sort((a, b) => b.submittedAt.localeCompare(a.submittedAt)).slice(0, 6).map(t => `<div class="list-item"><div><b>${esc(levyOf(t.levy).name)}</b><small>${esc(fmtDate(t.date))}, ${money(t.amount)}</small></div>${badge(t.status)}</div>`).join('') || '<div class="empty"><b>No payments yet</b>Upload your first proof of payment.</div>'}</div></section></div>
     ${paymentPanel()}
+    ${pledgePanel()}
     ${attendanceMember()}
     ${sponsorsPanel()}
     ${MEMBER.records()}`;
@@ -849,16 +851,6 @@ const MEMBER = {
   }
 };
 
-function uploadBody(levyId) {
-  const L = levyOf(levyId || 'annual');
-  return `<div class="form-row"><div class="field"><label for="uLevy">Levy</label><select id="uLevy" name="levy" class="select" data-amount-source>${levyOpts(L.id)}</select></div>
-  <div class="field"><label for="uAmt">Amount paid (naira)</label><input id="uAmt" name="amount" class="input" type="number" min="1" step="1" inputmode="numeric" value="${L.fixed ? S.v.settings.levies[L.id] : ''}" placeholder="0" required></div></div>
-  <div class="form-row"><div class="field"><label for="uDate">Payment date</label><input id="uDate" name="date" class="input" type="date" max="${today()}" value="${today()}" required></div>
-  <div class="field"><label for="uMethod">How did you pay?</label><select id="uMethod" name="method" class="select">${methodOpts('')}</select></div></div>
-  <div class="field"><label for="uRef">Bank reference or teller number</label><input id="uRef" name="ref" class="input" type="text" placeholder="From your slip or bank alert" maxlength="60" required></div>
-  ${fileField('Proof of payment')}
-  <div class="field"><label for="uNote">Note for the admin (optional)</label><textarea id="uNote" name="note" class="textarea" maxlength="300" placeholder="For example: paid on behalf of my brother"></textarea></div>`;
-}
 
 /* ---------- Shared: reports and profile ---------- */
 function closedPeriods(memberId) {
@@ -993,7 +985,7 @@ const ACTIONS = {
   'verify-tx'(el) {
     const t = getTx(el.dataset.id);
     openModal({ title: 'Verify payment', size: 'modal-lg', sub: `${esc(nameOf(t.memberId))} says they paid ${esc(levyOf(t.levy).name)} on ${esc(fmtDate(t.date))} by ${esc(t.method)}. Reference: ${esc(t.ref || 'none')}.`,
-      body: `<div class="form-row" style="margin-top:14px"><div>${proofHTML(t.proof)}</div><div><div class="field" style="margin-top:0"><label for="vAmt">Amount confirmed in the bank (naira)</label><input id="vAmt" name="amount" class="input" type="number" min="1" value="${t.amount}" required><span class="hint">Change this only if the proof shows a different amount.</span></div><div class="field"><label for="vNote">Note (optional)</label><textarea id="vNote" name="note" class="textarea" maxlength="300">${esc(t.note || '')}</textarea></div></div></div>`,
+      body: `<div class="form-row" style="margin-top:14px"><div>${proofHTML(proofOf(t))}</div><div><div class="field" style="margin-top:0"><label for="vAmt">Amount confirmed in the bank (naira)</label><input id="vAmt" name="amount" class="input" type="number" min="1" value="${t.amount}" required><span class="hint">Change this only if the proof shows a different amount.</span></div><div class="field"><label for="vNote">Note (optional)</label><textarea id="vNote" name="note" class="textarea" maxlength="300">${esc(t.note || '')}</textarea></div></div></div>`,
       submit: 'Verify and update records', onSubmit: fd => { const a = Number(fd.get('amount')); if (!(a > 0)) throw new Error('Enter the confirmed amount.'); API.verify(t.id, a, (fd.get('note') || '').trim()); done('Payment verified and the ledger updated.'); } });
   },
   'reject-tx'(el) {
@@ -1074,20 +1066,6 @@ const FORMS = {
 };
 
 /* ---------- Modals for member and shared actions ---------- */
-function uploadModal() {
-  if (isAdmin()) return;
-  openModal({ title: 'Send proof of payment', sub: 'Pay first, then upload the slip. Your admin will check it against the bank statement.', body: uploadBody('annual'), submit: 'Send for verification',
-    onSubmit: async fd => {
-      const levy = fd.get('levy'), amount = Number(fd.get('amount')), date = fd.get('date'), ref = (fd.get('ref') || '').trim(), file = fd.get('proof');
-      if (!(amount > 0)) throw new Error('Enter the amount you paid.');
-      if (!date || date > today()) throw new Error('Choose the date you paid. It cannot be in the future.');
-      if (ref.length < 3) throw new Error('Enter the bank reference or teller number from your slip.');
-      if (!file || !file.size) throw new Error('Attach a photo or PDF of your proof of payment.');
-      const proof = await readProof(file);
-      API.submitProof({ levy, amount, date, method: fd.get('method'), ref, note: (fd.get('note') || '').trim(), proof });
-      done('Proof sent. Your admin will verify it soon.');
-    } });
-}
 function reportModal(scope) {
   const now = new Date(), village = scope === 'village';
   openModal({ title: village ? 'Download village report' : 'Download my statement', sub: village ? 'Collections and spending for the whole village.' : 'Your own verified payments for the period.', submit: 'Download PDF',
@@ -1360,8 +1338,9 @@ const OWNERV = {
     return `${OWN.data.defaultPw ? `<div class="owner-banner"><div><b>Change the default owner password.</b> Anyone who knows it can open every village.</div><button class="btn btn-saffron btn-sm" type="button" data-act="change-pw">Change password</button></div>` : ''}
     <div class="kpis">${kpi('Collected in ' + yr, money(tot('collected')), 'All villages together', 'hot')}${kpi('Waiting for verification', String(tot('pending')), money(tot('pendingAmt')))}${kpi('Active members', String(tot('members')), `${tot('admins')} active admins`)}${kpi('Villages open', `${live} of ${rows.length}`, live < rows.length ? 'Some villages are paused' : 'All villages running')}</div>
     <section class="panel"><div class="panel-h"><div><h2>Collections by village in ${yr}</h2><p>Verified payments only</p></div></div>${barChart(rows.map(r => ({ label: r.vil.code, title: r.v.name, value: r.st.collected })))}</section>
+    ${plansPanel(rows)}
     <section class="panel"><div class="panel-h"><div><h2>Every village at a glance</h2><p>Open any village to work in it with full admin control.</p></div></div>
-    ${table(['Village', { t: 'Members', num: true }, { t: 'Collected ' + yr, num: true }, { t: 'Spent ' + yr, num: true }, { t: 'Balance', num: true }, { t: 'Waiting', num: true }, 'Status', ''], rows.map(r => [`${vDot(r.vil)}${esc(r.v.name)}<small>${esc(r.vil.code)}</small>`, String(r.st.members), money(r.st.collected), money(r.st.spent), money(r.st.balance), String(r.st.pending), statusBadge(r.v), `<div class="actions"><button class="btn btn-primary btn-sm" type="button" data-act="owner-open" data-id="${r.vil.id}">Open dashboard</button><button class="btn btn-ghost btn-sm" type="button" data-act="owner-manage" data-id="${r.vil.id}">Manage</button></div>`]), ['No villages loaded', ''])}</section>`;
+    ${table(['Village', { t: 'Members', num: true }, { t: 'Collected ' + yr, num: true }, { t: 'Spent ' + yr, num: true }, { t: 'Balance', num: true }, { t: 'Waiting', num: true }, 'Plan', 'Status', ''], rows.map(r => [`${vDot(r.vil)}${esc(r.v.name)}<small>${esc(r.vil.code)}</small>`, String(r.st.members), money(r.st.collected), money(r.st.spent), money(r.st.balance), String(r.st.pending), planBadge(r.v), statusBadge(r.v), `<div class="actions"><button class="btn btn-primary btn-sm" type="button" data-act="owner-open" data-id="${r.vil.id}">Open dashboard</button><button class="btn btn-ghost btn-sm" type="button" data-act="owner-manage" data-id="${r.vil.id}">Manage</button></div>`]), ['No villages loaded', ''])}</section>`;
   },
   'o-villages'() {
     const rows = VILLAGES.map(vil => ({ vil, v: DB.cache[vil.id] })).filter(r => r.v);
@@ -1966,7 +1945,7 @@ function memberProfile(id) {
   <div class="btn-row">${it.owe > 0 ? `<button class="btn btn-primary btn-sm" type="button" data-act="notice-one" data-id="${esc(id)}">Download notice (PDF)</button>` : ''}${wa ? `<a class="btn btn-leaf btn-sm" href="${esc(wa)}" target="_blank" rel="noopener noreferrer" data-act="notice-wa" data-id="${esc(id)}">Send reminder on WhatsApp</a>` : ''}<button class="btn btn-ghost btn-sm" type="button" data-act="cred-send" data-id="${esc(id)}">Send login details</button><button class="btn btn-ghost btn-sm" type="button" data-act="edit-member" data-id="${esc(id)}">Edit</button><button class="btn btn-ghost btn-sm" type="button" data-act="member-tx" data-id="${esc(id)}">All payments</button></div>
   <div class="sec-title">What they owe in ${yr}</div>${table(['Levy', { t: 'Required', num: true }, { t: 'Paid', num: true }, { t: 'Owes', num: true }], it.rows.map(r => [esc(r.L.name), money(r.need), money(r.paid), r.owe ? `<b style="color:var(--hibiscus)">${money(r.owe)}</b>` : '<span class="badge b-verified">Paid</span>']), ['No required levies', ''])}
   <div class="sec-title">Payment history</div>${table(['Date', 'Levy', { t: 'Amount', num: true }, 'Status', ''], txs.slice(0, 8).map(t => [esc(fmtDate(t.date)), esc(levyOf(t.levy).name), money(t.amount), badge(t.status), `<button class="btn btn-ghost btn-sm" type="button" data-act="view-tx" data-id="${t.id}">Open</button>`]), ['No payments yet', ''])}
-  <div class="sec-title">Attendance history</div>${table(['Date', 'Meeting', 'Status'], att.rows.slice(0, 8).map(r => [esc(fmtDate(r.m.date)), esc(r.m.title), attBadge(r.state)]), ['No meetings yet', ''])}`);
+  <div class="sec-title">Attendance history</div>${table(['Date', 'Meeting', 'Status'], att.rows.slice(0, 8).map(r => [esc(fmtDate(r.m.date)), esc(r.m.title), attBadge(r.state)]), ['No meetings yet', ''])}${pledgeSection(id)}`);
 }
 Object.assign(ACTIONS, {
   'member-profile'(el) { memberProfile(el.dataset.id); },
@@ -2035,19 +2014,24 @@ Object.assign(API, {
     m.status = 'closed'; m.closedAt = stamp(); m.closedBy = S.u.name; log('Closed attendance register', id, `${m.title}: ${presentCount(m)} present, ${m.marks.filter(k => k.status === 'pending').length} not yet verified`); commit();
   },
   markAttendance() {
-    if (!S.u || S.u.role !== 'member' || !S.u.active) throw new Error('Only members can mark attendance.'); requireWritable();
+    if (!S.u || S.u.id === 'SUPPORT' || S.owner || !['member', 'admin'].includes(S.u.role) || !S.u.active) throw new Error('Only members and admins can mark their own attendance.'); requireWritable();
     const m = S.v.meetings.find(meetingOpen); if (!m) throw new Error('No register is open right now. Your admin opens it on meeting days only.');
     if (m.marks.some(k => k.memberId === S.u.id)) throw new Error('You have already marked attendance for this meeting.');
     m.marks.push({ memberId: S.u.id, at: stamp(), status: 'pending' }); commit(); return m;
   },
   setMark(mid, memberId, status) {
     requireAdmin(); const m = getMtg(mid); let k = m.marks.find(x => x.memberId === memberId);
-    if (!k) { k = { memberId, at: stamp(), status: 'pending', addedByAdmin: true }; m.marks.push(k); }
+    if (!k) {
+      if (status !== 'verified') throw new Error('There is no mark to change.');
+      k = { memberId, at: stamp(), status: 'pending', addedByAdmin: true, addedBy: S.u.name, addedById: S.u.id }; m.marks.push(k);
+      log('Marked attendance (needs a second admin)', mid, `${nameOf(memberId)} at ${m.title}, ${fmtDate(m.date)}. Another admin must verify it`); commit(); return;
+    }
+    if (status === 'verified' && (k.memberId === S.u.id || k.addedById === S.u.id)) throw new Error('You cannot verify your own entry. Another admin must verify it.');
     k.status = status; k.by = S.u.name; k.byId = S.u.id; k.byAt = stamp();
     log(status === 'verified' ? 'Verified attendance' : 'Did not accept attendance', mid, `${nameOf(memberId)} at ${m.title}, ${fmtDate(m.date)}${k.addedByAdmin ? ' (added by admin)' : ''}`); commit();
   },
   verifyAll(mid) {
-    requireAdmin(); const m = getMtg(mid), p = m.marks.filter(k => k.status === 'pending'); if (!p.length) throw new Error('Nothing is waiting for verification.');
+    requireAdmin(); const m = getMtg(mid), p = m.marks.filter(k => k.status === 'pending' && k.memberId !== S.u.id && k.addedById !== S.u.id); if (!p.length) throw new Error('Nothing is waiting for you to verify. Entries you made yourself need another admin.');
     p.forEach(k => { k.status = 'verified'; k.by = S.u.name; k.byId = S.u.id; k.byAt = stamp(); }); log('Verified attendance', mid, `${p.length} members at ${m.title}, ${fmtDate(m.date)}`); commit(); return p.length;
   },
   removeMark(mid, memberId) {
@@ -2072,7 +2056,7 @@ function attendanceMember() {
   <div class="sec-title">My attendance history</div>${table(['Date', 'Meeting', 'Status'], att.rows.slice(0, 8).map(r => [esc(fmtDate(r.m.date)), esc(r.m.title), attBadge(r.state)]), ['No meetings yet', 'Registers opened by your admin appear here.'])}</section>`;
 }
 function attendanceRegisterView() {
-  const list = meetingsDesc().slice(0, 8), active = S.v.users.filter(u => u.role === 'member' && u.active).length;
+  const list = meetingsDesc().slice(0, 8), active = S.v.users.filter(u => (u.role === 'member' || u.role === 'admin') && u.active).length;
   return `<section class="panel"><div class="panel-h"><div><h2>Attendance register</h2><p>Meetings and who was verified present. Open a meeting to see the names.</p></div></div>
   ${table(['Date', 'Meeting', { t: 'Present', num: true }, { t: 'Rate', num: true }, 'Status', ''], list.map(m => [esc(fmtDate(m.date)), esc(m.title), String(presentCount(m)), active ? Math.round(presentCount(m) / active * 100) + '%' : '-', meetingOpen(m) ? '<span class="badge b-verified">Open today</span>' : '<span class="badge b-off">Closed</span>', `<button class="btn btn-ghost btn-sm" type="button" data-act="view-register" data-id="${esc(m.id)}">View register</button>`]), ['No meetings yet', 'Registers opened by admins appear here.']).replace(/<td class="num">(<button)/g, '<td>$1')}</section>`;
 }
@@ -2082,10 +2066,11 @@ function activityFeed() {
   <div class="list">${list.map(a => `<div class="list-item"><div><b>${esc(a.action)}</b><small>${esc(a.detail)}</small><small>${esc(a.adminName)}${a.adminTitle ? ', ' + esc(a.adminTitle) : ''} on ${esc(fmtTS(a.ts))}</small></div></div>`).join('') || '<div class="empty"><b>No activity yet</b></div>'}</div></section>`;
 }
 Object.assign(ACTIONS, {
+  'att-mark-admin'(el) { requireAdmin(); API.markAttendance(); toast('Marked. Another admin must verify your attendance.', 'ok'); mtgView(el.dataset.id); renderSoon(); },
   'att-mark'() { API.markAttendance(); toast('Attendance marked. Your admin will verify it.', 'ok'); renderView(); },
   'view-register'(el) {
     const m = S.v.meetings.find(x => x.id === el.dataset.id); if (!m) return;
-    const here = m.marks.filter(k => k.status === 'verified').map(k => nameOf(k.memberId)).sort(), active = S.v.users.filter(u => u.role === 'member' && u.active).length;
+    const here = m.marks.filter(k => k.status === 'verified').map(k => nameOf(k.memberId)).sort(), active = S.v.users.filter(u => (u.role === 'member' || u.role === 'admin') && u.active).length;
     infoModal(m.title, `${esc(fmtDate(m.date))}. ${here.length} verified present of ${active} members.${meetingOpen(m) ? ' The register is open today.' : ''}`, here.length ? `<div class="namegrid">${here.map(n => `<span>${esc(n)}</span>`).join('')}</div>` : '<div class="empty"><b>Nobody verified yet</b></div>', 'modal-md');
   }
 });
@@ -2131,13 +2116,15 @@ function regRequests() {
 /* ----- Register modal: verify names, add a member, click a name for their history ----- */
 function mtgView(id) {
   const m = getMtg(id), open = meetingOpen(m), pend = m.marks.filter(k => k.status === 'pending').length;
-  const people = S.v.users.filter(u => u.role === 'member' && (u.active || m.marks.some(k => k.memberId === u.id))).sort((a, b) => a.name.localeCompare(b.name));
+  const people = S.v.users.filter(u => (u.role === 'member' || u.role === 'admin') && (u.active || m.marks.some(k => k.memberId === u.id))).sort((a, b) => a.name.localeCompare(b.name));
   const rows = people.map(u => { const k = m.marks.find(x => x.memberId === u.id), st = k ? k.status : 'absent';
-    const act = st === 'pending' ? `<button class="btn btn-leaf btn-sm" type="button" data-act="mtg-mark" data-id="${esc(m.id)}" data-m="${esc(u.id)}" data-s="verified">Verify</button><button class="btn btn-ghost btn-sm" type="button" data-act="mtg-mark" data-id="${esc(m.id)}" data-m="${esc(u.id)}" data-s="rejected">Reject</button>`
-      : st === 'verified' ? `<button class="btn btn-ghost btn-sm" type="button" data-act="mtg-remove" data-id="${esc(m.id)}" data-m="${esc(u.id)}">Remove</button>` : `<button class="btn btn-ghost btn-sm" type="button" data-act="mtg-mark" data-id="${esc(m.id)}" data-m="${esc(u.id)}" data-s="verified">Mark present</button>`;
+    const own = u.id === S.u.id, mine = k && (k.memberId === S.u.id || k.addedById === S.u.id), bt = (a, l, extra) => `<button class="btn ${extra || 'btn-ghost'} btn-sm" type="button" data-act="${a}" data-id="${esc(m.id)}" data-m="${esc(u.id)}"`;
+    const vbtn = `${bt('mtg-mark', '', 'btn-leaf')} data-s="verified">Verify</button>${bt('mtg-mark')} data-s="rejected">Reject</button>`, rm = `${bt('mtg-remove')}>Remove</button>`;
+    const act = st === 'pending' ? (mine ? `<small>Another admin must verify</small>${k.addedById === S.u.id && !own ? rm : ''}` : vbtn)
+      : st === 'verified' ? (own ? '' : rm) : (own ? '' : `${bt('mtg-mark')} data-s="verified">Mark present</button>`);
     return [`${linkBtn('member-profile', u.id, u.name)}<small>${esc(u.id)}</small>`, k ? esc(fmtTS(k.at)) + (k.addedByAdmin ? '<small>Added by admin</small>' : '') : '-', attBadge(st === 'absent' && open ? 'absent' : st), k && k.by ? `${esc(k.by)}<small>${esc(fmtTS(k.byAt))}</small>` : '-', `<div class="actions">${act}</div>`]; });
   infoModal(m.title, `${esc(fmtDate(m.date))}. ${presentCount(m)} verified present, ${pend} waiting. ${open ? 'Register is open.' : 'Register is closed.'}`,
-    `<div class="btn-row" style="margin-top:12px">${pend ? `<button class="btn btn-leaf btn-sm" type="button" data-act="mtg-all" data-id="${esc(m.id)}">Verify all ${pend} waiting</button>` : ''}${open ? `<button class="btn btn-ghost btn-sm" type="button" data-act="mtg-close" data-id="${esc(m.id)}">Close register</button>` : ''}<button class="btn btn-ghost btn-sm" type="button" data-act="mtg-csv" data-id="${esc(m.id)}">Download CSV</button></div>
+    `<div class="btn-row" style="margin-top:12px">${pend ? `<button class="btn btn-leaf btn-sm" type="button" data-act="mtg-all" data-id="${esc(m.id)}">Verify all ${pend} waiting</button>` : ''}${open ? `<button class="btn btn-ghost btn-sm" type="button" data-act="mtg-close" data-id="${esc(m.id)}">Close register</button>` : ''}${open && !m.marks.some(k => k.memberId === S.u.id) && S.u.id !== 'SUPPORT' && !S.owner ? `<button class="btn btn-primary btn-sm" type="button" data-act="att-mark-admin" data-id="${esc(m.id)}">Mark me present</button>` : ''}<button class="btn btn-ghost btn-sm" type="button" data-act="mtg-csv" data-id="${esc(m.id)}">Download CSV</button></div>
     ${table(['Member', 'Marked at', 'Status', 'Checked by', ''], rows, ['No members', '']).replace(/<td>(<div class="actions">)/g, '<td>$1')}`);
 }
 Object.assign(ACTIONS, {
@@ -2225,6 +2212,182 @@ Object.assign(ACTIONS, {
       onSubmit: fd => { if (!fd.get('reason')) throw new Error('Choose a reason.'); API.resolveRequest(r.id, { status: 'declined', reason: fd.get('reason') }); done('Request declined.'); } });
   }
 });
+/* =========================================================
+   ROUND 5: pay several levies at once, optional reference,
+   pledges, plans overview for the owner
+   ========================================================= */
+const proofOf = t => t.proof || (t.proofFrom && (S.v.tx.find(x => x.id === t.proofFrom) || {}).proof) || null;
+const getPledge = id => { const p = (S.v.pledges || []).find(x => x.id === id); if (!p) throw new Error('Pledge not found.'); return p; };
+const pledgePaid = p => sum(S.v.tx.filter(t => t.pledgeId === p.id && t.status === 'verified'));
+const pledgeWaiting = p => sum(S.v.tx.filter(t => t.pledgeId === p.id && t.status === 'pending'));
+const pledgeBal = p => Math.max(0, p.amount - pledgePaid(p));
+const pledgeState = p => p.status === 'cancelled' ? 'cancelled' : pledgePaid(p) >= p.amount ? 'paid' : pledgePaid(p) > 0 ? 'part' : 'open';
+const pledgeBadge = p => ({ cancelled: '<span class="badge b-off">Cancelled</span>', paid: '<span class="badge b-verified">Fulfilled</span>', part: '<span class="badge b-pending">Part paid</span>', open: '<span class="badge b-pending">Not yet paid</span>' })[pledgeState(p)];
+const livePledges = id => (S.v.pledges || []).filter(p => p.memberId === id && p.status !== 'cancelled');
+
+Object.assign(API, {
+  /* One slip, one upload, several levies and pledges. Each ticked item becomes its own record, so every levy stays separate in reports. */
+  submitPayment(d) {
+    if (isAdmin()) throw new Error('Admins record payments from the Transactions page.');
+    requireWritable();
+    if (!d.items || !d.items.length) throw new Error('Tick at least one levy this payment covers.');
+    const batch = d.items.length > 1 ? nextId('batch', 'B') : '', made = [];
+    d.items.forEach(it => {
+      if (!(it.amount > 0)) throw new Error('Enter an amount for every ticked item.');
+      let levy = it.levy, pledgeId = '';
+      if (it.pledgeId) { const p = getPledge(it.pledgeId); if (p.memberId !== S.u.id || p.status === 'cancelled') throw new Error('That pledge is not available.'); levy = p.levy; pledgeId = p.id; }
+      else if (!levies().some(l => l.id === levy)) throw new Error('One of the levies is no longer available.');
+      const t = { id: nextId('tx', 'T'), memberId: S.u.id, levy, amount: it.amount, date: d.date, method: d.method, ref: d.ref || '', note: d.note || '', status: 'pending', proof: made.length ? null : d.proof, proofFrom: made.length ? made[0].id : '', batch, pledgeId, submittedAt: stamp(), submittedBy: S.u.name, updatedBy: null, updatedAt: null, history: [] };
+      if (!batch) delete t.batch; if (!pledgeId) delete t.pledgeId; if (!t.proofFrom) delete t.proofFrom;
+      S.v.tx.push(t); made.push(t);
+    });
+    commit(); return made;
+  },
+  addPledge(d) {
+    requireAdmin(); const u = userById(d.memberId);
+    if (!u || u.role !== 'member') throw new Error('Choose the member who made the pledge.');
+    if (!(d.amount > 0)) throw new Error('Enter the pledged amount.'); if ((d.purpose || '').length < 3) throw new Error('Say what the pledge is for.');
+    if (!levies().some(l => l.id === d.levy)) throw new Error('Choose the category the money will be recorded under.');
+    const p = { id: nextId('pl', 'P'), memberId: u.id, amount: d.amount, levy: d.levy, purpose: d.purpose, date: d.date, due: d.due || '', note: d.note || '', status: 'open', createdBy: S.u.name, createdById: S.u.id, createdAt: stamp(), history: [] };
+    S.v.pledges.push(p); log('Registered pledge', p.id, `${u.name} pledged ${money(p.amount)}: ${p.purpose}`); commit(); return p;
+  },
+  editPledge(id, d) {
+    requireAdmin(); const p = getPledge(id); if (p.status === 'cancelled') throw new Error('A cancelled pledge cannot be edited.');
+    if (!(d.amount > 0)) throw new Error('Enter the pledged amount.'); if (d.amount < pledgePaid(p)) throw new Error(`${money(pledgePaid(p))} is already paid, so the pledge cannot be less than that.`);
+    if ((d.purpose || '').length < 3) throw new Error('Say what the pledge is for.');
+    const ch = []; if (d.amount !== p.amount) ch.push(`amount ${money(p.amount)} to ${money(d.amount)}`); if (d.purpose !== p.purpose) ch.push('purpose'); if ((d.due || '') !== (p.due || '')) ch.push('due date');
+    Object.assign(p, { amount: d.amount, purpose: d.purpose, due: d.due || '', note: d.note || '', date: d.date || p.date });
+    p.history.push({ ts: stamp(), by: S.u.name, text: 'Edited: ' + (ch.join(', ') || 'details') });
+    log('Edited pledge', p.id, `${nameOf(p.memberId)}: ${ch.join(', ') || 'details'}`); commit(); return p;
+  },
+  cancelPledge(id, reason) {
+    requireAdmin(); const p = getPledge(id); p.status = 'cancelled'; p.cancelReason = reason; p.history.push({ ts: stamp(), by: S.u.name, text: 'Cancelled: ' + reason });
+    log('Cancelled pledge', p.id, `${nameOf(p.memberId)}, ${money(p.amount)}: ${reason}`); commit(); return p;
+  },
+  payPledge(id, d) {
+    requireAdmin(); const p = getPledge(id); if (p.status === 'cancelled') throw new Error('This pledge was cancelled.');
+    if (!(d.amount > 0)) throw new Error('Enter the amount received.'); if (d.amount > pledgeBal(p)) throw new Error(`Only ${money(pledgeBal(p))} is still owed on this pledge.`);
+    const t = API.addTx({ memberId: p.memberId, levy: p.levy, amount: d.amount, date: d.date, method: d.method, ref: d.ref || '', note: 'Pledge: ' + p.purpose, status: 'verified' });
+    t.pledgeId = p.id; log('Recorded pledge payment', p.id, `${money(d.amount)} from ${nameOf(p.memberId)} towards ${p.purpose}`); commit(); return t;
+  }
+});
+
+/* ----- Member: tick the levies this payment covers ----- */
+function uploadBody(pre) {
+  const yr = new Date().getFullYear(), owe = {}; owingRows(S.u.id, yr).forEach(r => { owe[r.L.id] = r; });
+  const items = levies().map(L => ({ key: 'L:' + L.id, name: L.name, owe: L.fixed ? (owe[L.id] ? owe[L.id].owe : 0) : 0, need: L.fixed ? (S.v.settings.levies[L.id] || 0) : 0, fixed: L.fixed }))
+    .concat(livePledges(S.u.id).filter(p => pledgeBal(p) > 0).map(p => ({ key: 'P:' + p.id, name: 'Pledge: ' + p.purpose, owe: pledgeBal(p), need: pledgeBal(p), fixed: true, pledge: true })));
+  const first = pre || ((items.find(i => i.owe > 0) || {}).key || '');
+  const rows = items.map(i => { const on = i.key === first, amt = i.owe > 0 ? i.owe : (i.fixed ? i.need : '');
+    return `<label class="lv-row${on ? ' on' : ''}"><input type="checkbox" class="lv-pick" name="pick" value="${esc(i.key)}"${on ? ' checked' : ''}><span class="lv-name">${esc(i.name)}<small>${i.pledge ? 'Still to pay ' + money(i.owe) : !i.fixed ? 'Any amount you choose' : i.owe > 0 ? 'You owe ' + money(i.owe) : 'Paid up for this year'}</small></span><span class="lv-amt"><input class="input lv-in" type="number" min="1" step="1" inputmode="numeric" name="amt_${esc(i.key)}" value="${amt}" placeholder="0" aria-label="Amount for ${esc(i.name)}"${on ? '' : ' disabled'}></span></label>`; }).join('');
+  return `<div class="field"><label>Tick what this payment covers</label><div class="lv-list">${rows}</div><div class="lv-total"><span>Total on your slip should be</span><b id="lvTotal">${money(0)}</b></div></div>
+  <div class="form-row"><div class="field"><label for="uDate">Payment date</label><input id="uDate" name="date" class="input" type="date" max="${today()}" value="${today()}" required></div>
+  <div class="field"><label for="uMethod">How did you pay?</label><select id="uMethod" name="method" class="select">${methodOpts('')}</select></div></div>
+  <div class="field"><label for="uRef">Bank reference or teller number (optional)</label><input id="uRef" name="ref" class="input" type="text" placeholder="Leave empty if your slip has none" maxlength="60"></div>
+  ${fileField('Proof of payment')}
+  <div class="field"><label for="uNote">Note for the admin (optional)</label><textarea id="uNote" name="note" class="textarea" maxlength="300" placeholder="For example: paid on behalf of my brother"></textarea></div>`;
+}
+function lvUpdateTotal() { const f = $('#mForm'); if (!f || !$('#lvTotal')) return; let t = 0; $$('.lv-in', f).forEach(i => { if (!i.disabled) t += Number(i.value) || 0; }); $('#lvTotal').textContent = money(t); }
+document.addEventListener('change', e => { const t = e.target; if (!t.matches || !t.matches('.lv-pick')) return; const row = t.closest('.lv-row'), inp = $('.lv-in', row); inp.disabled = !t.checked; row.classList.toggle('on', t.checked); if (t.checked && !(Number(inp.value) > 0)) inp.focus(); lvUpdateTotal(); });
+document.addEventListener('input', e => { if (e.target.matches && e.target.matches('.lv-in')) lvUpdateTotal(); });
+function uploadModal(pre) {
+  if (isAdmin()) return;
+  openModal({ title: 'Send proof of payment', sub: 'Pay first, then upload the slip. Tick every levy it covers so you can pay them all at once. Your admin checks it against the bank statement.', body: uploadBody(pre), size: 'modal-lg', submit: 'Send for verification',
+    onSubmit: async fd => {
+      const picks = fd.getAll('pick'), date = fd.get('date'), ref = (fd.get('ref') || '').trim(), file = fd.get('proof');
+      if (!picks.length) throw new Error('Tick at least one levy this payment covers.');
+      const items = picks.map(k => { const amount = Number(fd.get('amt_' + k)); if (!(amount > 0)) throw new Error('Enter an amount for every ticked item.'); return k.startsWith('P:') ? { pledgeId: k.slice(2), amount } : { levy: k.slice(2), amount }; });
+      if (!date || date > today()) throw new Error('Choose the date you paid. It cannot be in the future.');
+      if (!file || !file.size) throw new Error('Attach a photo or PDF of your proof of payment.');
+      const proof = await readProof(file);
+      const made = API.submitPayment({ items, date, method: fd.get('method'), ref, note: (fd.get('note') || '').trim(), proof });
+      done(made.length > 1 ? `Proof sent for ${made.length} levies. Your admin will verify it soon.` : 'Proof sent. Your admin will verify it soon.');
+    }, });
+  lvUpdateTotal();
+}
+
+/* ----- Admin: verify or reject a payment that covers several levies together ----- */
+const _verifyTx = ACTIONS['verify-tx'], _rejectTx = ACTIONS['reject-tx'];
+const batchPending = t => t.batch ? S.v.tx.filter(x => x.batch === t.batch && x.status === 'pending') : [t];
+Object.assign(ACTIONS, {
+  'upload-proof'(el) { uploadModal(el && el.dataset ? el.dataset.pre : ''); },
+  'verify-tx'(el) {
+    const t = getTx(el.dataset.id), sib = batchPending(t); if (sib.length < 2) return _verifyTx(el);
+    const rows = sib.map(x => `<tr><td><label class="check"><input type="checkbox" name="inc" value="${esc(x.id)}" checked> ${esc(levyOf(x.levy).name)}${x.pledgeId ? ' (pledge)' : ''}</label></td><td class="num"><input class="input" type="number" min="1" name="amt_${esc(x.id)}" value="${x.amount}" style="max-width:140px"></td></tr>`).join('');
+    openModal({ title: 'Verify payment', size: 'modal-lg', sub: `${esc(nameOf(t.memberId))} paid ${sib.length} levies with one slip on ${esc(fmtDate(t.date))} by ${esc(t.method)}. Reference: ${esc(t.ref || 'none')}.`,
+      body: `<div class="form-row" style="margin-top:14px"><div>${proofHTML(proofOf(sib.find(x => proofOf(x)) || t))}</div><div><table class="t"><thead><tr><th>Tick the items you confirm</th><th class="num">Amount in the bank</th></tr></thead><tbody>${rows}</tbody></table><span class="hint">Total on the slip: ${money(sum(sib))}. Untick anything you cannot find in the bank statement; it stays waiting.</span><div class="field"><label for="vNote">Note (optional)</label><textarea id="vNote" name="note" class="textarea" maxlength="300"></textarea></div></div></div>`,
+      submit: 'Verify ticked items', onSubmit: fd => { const ids = fd.getAll('inc'); if (!ids.length) throw new Error('Tick at least one item to verify.'); const jobs = ids.map(id => ({ id, a: Number(fd.get('amt_' + id)) })); if (jobs.some(j => !(j.a > 0))) throw new Error('Enter a confirmed amount for every ticked item.'); jobs.forEach(j => API.verify(j.id, j.a, (fd.get('note') || '').trim())); done(`${jobs.length} items verified and the ledger updated.`); } });
+  },
+  'reject-tx'(el) {
+    const t = getTx(el.dataset.id), sib = batchPending(t); if (sib.length < 2) return _rejectTx(el);
+    openModal({ title: 'Reject payment', danger: true, sub: `${esc(nameOf(t.memberId))} paid ${sib.length} levies with one slip (${money(sum(sib))}). All ${sib.length} items will be rejected together and the member sees your reason.`,
+      body: `<div class="field"><label for="rjR">Reason</label><select id="rjR" name="reason" class="select" required>${opt('', 'Choose a reason', '')}${REJECT_REASONS.map(r => opt(r, r, '')).join('')}</select></div>`, submit: 'Reject all items',
+      onSubmit: fd => { if (!fd.get('reason')) throw new Error('Choose a reason so the member knows what to fix.'); sib.forEach(x => API.reject(x.id, fd.get('reason'))); done('Payment rejected.'); } });
+  }
+});
+
+/* ----- Pledges ----- */
+function pledgeForm(p) {
+  const lv = levies(), def = p.levy || (lv.find(l => !l.fixed) || lv[0]).id;
+  return `<div class="field"><label for="plM">Member</label><select id="plM" name="memberId" class="select" required${p.id ? ' disabled' : ''}>${memberOpts(p.memberId, 'Choose a member', true)}</select></div>
+  <div class="field"><label for="plP">What is the pledge for?</label><input id="plP" name="purpose" class="input" maxlength="80" placeholder="For example: Town hall roofing" value="${esc(p.purpose || '')}" required></div>
+  <div class="form-row"><div class="field"><label for="plA">Amount pledged (naira)</label><input id="plA" name="amount" class="input" type="number" min="1" step="1" value="${p.amount || ''}" required></div>
+  <div class="field"><label for="plL">Record the money under</label><select id="plL" name="levy" class="select"${p.id ? ' disabled' : ''}>${lv.map(l => opt(l.id, l.name, def)).join('')}</select></div></div>
+  <div class="form-row"><div class="field"><label for="plD">Date pledged</label><input id="plD" name="date" class="input" type="date" max="${today()}" value="${esc(p.date || today())}" required></div>
+  <div class="field"><label for="plU">Promised by (optional)</label><input id="plU" name="due" class="input" type="date" value="${esc(p.due || '')}"></div></div>
+  <div class="field"><label for="plN">Note (optional)</label><textarea id="plN" name="note" class="textarea" maxlength="300" placeholder="Where and when it was promised">${esc(p.note || '')}</textarea></div>`;
+}
+const readPledge = fd => ({ memberId: fd.get('memberId'), purpose: (fd.get('purpose') || '').trim(), amount: Number(fd.get('amount')), levy: fd.get('levy'), date: fd.get('date'), due: fd.get('due') || '', note: (fd.get('note') || '').trim() });
+function pledgeDetail(id) {
+  const p = getPledge(id), txs = S.v.tx.filter(t => t.pledgeId === p.id).sort((a, b) => b.date.localeCompare(a.date));
+  const admin = isAdmin();
+  infoModal('Pledge: ' + p.purpose, `${esc(nameOf(p.memberId))}, ${esc(p.memberId)}`,
+    `<div class="kpis kpis-3" style="margin-top:14px">${kpi('Pledged', money(p.amount), fmtDate(p.date))}${kpi('Paid', money(pledgePaid(p)), pledgeWaiting(p) ? money(pledgeWaiting(p)) + ' waiting for verification' : '', 'good')}${kpi('Balance', money(pledgeBal(p)), p.due ? 'Promised by ' + fmtDate(p.due) : '', pledgeBal(p) ? 'bad' : '')}</div>
+    <dl class="kv"><dt>Status</dt><dd>${pledgeBadge(p)}</dd><dt>Recorded under</dt><dd>${esc(levyOf(p.levy).name)}</dd><dt>Registered by</dt><dd>${esc(p.createdBy)}, ${esc(fmtTS(p.createdAt))}</dd>${p.note ? `<dt>Note</dt><dd>${esc(p.note)}</dd>` : ''}${p.cancelReason ? `<dt>Cancelled because</dt><dd>${esc(p.cancelReason)}</dd>` : ''}</dl>
+    ${admin && p.status !== 'cancelled' ? `<div class="btn-row">${pledgeBal(p) ? `<button class="btn btn-primary btn-sm" type="button" data-act="pay-pledge" data-id="${esc(p.id)}">Record a payment</button>` : ''}<button class="btn btn-ghost btn-sm" type="button" data-act="edit-pledge" data-id="${esc(p.id)}">Edit</button><button class="btn btn-ghost btn-sm" type="button" data-act="cancel-pledge" data-id="${esc(p.id)}">Cancel pledge</button></div>` : ''}
+    ${!admin && pledgeBal(p) && p.status !== 'cancelled' ? `<div class="btn-row"><button class="btn btn-primary btn-sm" type="button" data-act="upload-proof" data-pre="P:${esc(p.id)}">Pay towards this pledge</button></div>` : ''}
+    <div class="sec-title">Payments towards it</div>${table(['Date', 'Amount', 'Status'], txs.map(t => [esc(fmtDate(t.date)), money(t.amount), badge(t.status)]), ['No payments yet', 'Payments made towards this pledge will show here.'])}`);
+}
+function pledgeSection(id) {
+  const list = livePledges(id); if (!list.length) return '';
+  return `<div class="sec-title">Pledges</div>${table(['Pledge', { t: 'Pledged', num: true }, { t: 'Paid', num: true }, { t: 'Balance', num: true }, 'Status'], list.map(p => [linkBtn('view-pledge', p.id, p.purpose), money(p.amount), money(pledgePaid(p)), money(pledgeBal(p)), pledgeBadge(p)]), ['', ''])}`;
+}
+function pledgePanel() {
+  const list = livePledges(S.u.id); if (!list.length) return '';
+  const left = sum(list.map(p => ({ amount: pledgeBal(p) })));
+  return `<section class="panel" id="pledges"><div class="panel-h"><div><h2>My pledges</h2><p>Promises you made to the village, registered by your admin. ${left ? 'You still owe ' + money(left) + '.' : 'All fulfilled. Thank you.'}</p></div></div>
+  ${table(['Pledge', 'Date', { t: 'Pledged', num: true }, { t: 'Paid', num: true }, { t: 'Balance', num: true }, 'Status', ''], list.map(p => [linkBtn('view-pledge', p.id, p.purpose) + `<small>Registered by ${esc(p.createdBy)}</small>`, esc(fmtDate(p.date)), money(p.amount), money(pledgePaid(p)), money(pledgeBal(p)), pledgeBadge(p), pledgeBal(p) ? `<button class="btn btn-primary btn-sm" type="button" data-act="upload-proof" data-pre="P:${esc(p.id)}">Pay</button>` : '']), ['', ''])}</section>`;
+}
+ADMIN.pledges = function () {
+  const f = S.f, all = S.v.pledges || [], live = all.filter(p => p.status !== 'cancelled'), st = f.pst || '';
+  const list = all.filter(p => !st || pledgeState(p) === st).sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)), page = paginate(list, f);
+  const pledged = sum(live), got = live.reduce((a, p) => a + Math.min(p.amount, pledgePaid(p)), 0);
+  return `<div class="kpis kpis-3">${kpi('Pledged', money(pledged), `${live.length} pledges`)}${kpi('Received', money(got), 'Verified payments', 'good')}${kpi('Still to receive', money(Math.max(0, pledged - got)), 'Follow up with members', pledged - got > 0 ? 'bad' : '')}</div>
+  <section class="panel"><div class="panel-h"><div><h2>Member pledges</h2><p>Register what a member promises. It shows on their dashboard, and payments update it after you verify them.</p></div><button class="btn btn-primary btn-sm" type="button" data-act="add-pledge">Register a pledge</button></div>
+  <div class="toolbar"><div class="field"><label for="plS">Show</label><select id="plS" class="select" data-filter="pst">${opt('', 'All pledges', st)}${opt('open', 'Not yet paid', st)}${opt('part', 'Part paid', st)}${opt('paid', 'Fulfilled', st)}${opt('cancelled', 'Cancelled', st)}</select></div></div>
+  ${table(['Member', 'Pledge', 'Date', { t: 'Pledged', num: true }, { t: 'Paid', num: true }, { t: 'Balance', num: true }, 'Status', ''], page.map(p => [`${linkBtn('member-profile', p.memberId, nameOf(p.memberId))}<small>${esc(p.memberId)}</small>`, `${linkBtn('view-pledge', p.id, p.purpose)}<small>${esc(levyOf(p.levy).name)}</small>`, esc(fmtDate(p.date)), money(p.amount), money(pledgePaid(p)), money(pledgeBal(p)), pledgeBadge(p), `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="view-pledge" data-id="${esc(p.id)}">Open</button>${p.status !== 'cancelled' && pledgeBal(p) ? `<button class="btn btn-leaf btn-sm" type="button" data-act="pay-pledge" data-id="${esc(p.id)}">Record payment</button>` : ''}</div>`]), ['No pledges yet', 'When a member promises money, register it here so it shows on their dashboard.'])}${pager(list.length, f.page, CONFIG.PER_PAGE)}</section>`;
+};
+VIEWS.admin.pledges = ADMIN.pledges;
+Object.assign(ACTIONS, {
+  'add-pledge'() { requireAdmin(); openModal({ title: 'Register a pledge', sub: 'The member will see it on their dashboard. Your name and the time are saved.', body: pledgeForm({}), submit: 'Save pledge', onSubmit: fd => { const d = readPledge(fd); if (!d.date) throw new Error('Choose the date pledged.'); const p = API.addPledge(d); done(`Pledge ${p.id} registered.`); } }); },
+  'edit-pledge'(el) { requireAdmin(); const p = getPledge(el.dataset.id); openModal({ title: 'Edit pledge', sub: `${esc(nameOf(p.memberId))}. Every change is logged under your name.`, body: pledgeForm(p), submit: 'Save changes', onSubmit: fd => { const d = readPledge(fd); API.editPledge(p.id, d); done('Pledge updated.'); } }); },
+  'cancel-pledge'(el) { requireAdmin(); const p = getPledge(el.dataset.id); openModal({ title: 'Cancel this pledge?', danger: true, sub: `${esc(nameOf(p.memberId))}, ${money(p.amount)}. Payments already received stay in the records.`, body: `<div class="field"><label for="cpR">Reason</label><textarea id="cpR" name="reason" class="textarea" maxlength="200" required></textarea></div>`, submit: 'Cancel pledge', onSubmit: fd => { const r = (fd.get('reason') || '').trim(); if (r.length < 3) throw new Error('Give a short reason.'); API.cancelPledge(p.id, r); done('Pledge cancelled.'); } }); },
+  'pay-pledge'(el) {
+    requireAdmin(); const p = getPledge(el.dataset.id);
+    openModal({ title: 'Record a pledge payment', sub: `${esc(nameOf(p.memberId))} owes ${money(pledgeBal(p))} on "${esc(p.purpose)}". It is saved as verified and counts in the reports.`,
+      body: `<div class="form-row"><div class="field"><label for="ppA">Amount received (naira)</label><input id="ppA" name="amount" class="input" type="number" min="1" max="${pledgeBal(p)}" value="${pledgeBal(p)}" required></div><div class="field"><label for="ppD">Date received</label><input id="ppD" name="date" class="input" type="date" max="${today()}" value="${today()}" required></div></div>
+      <div class="form-row"><div class="field"><label for="ppM">Method</label><select id="ppM" name="method" class="select">${methodOpts('')}</select></div><div class="field"><label for="ppR">Reference (optional)</label><input id="ppR" name="ref" class="input" maxlength="60"></div></div>`,
+      submit: 'Save payment', onSubmit: fd => { API.payPledge(p.id, { amount: Number(fd.get('amount')), date: fd.get('date'), method: fd.get('method'), ref: (fd.get('ref') || '').trim() }); done('Payment recorded against the pledge.'); } });
+  },
+  'view-pledge'(el) { pledgeDetail(el.dataset.id); }
+});
+
+/* ----- Owner: which plan every village runs on ----- */
+function plansPanel(rows) {
+  const by = p => rows.filter(r => (r.v.plan || 'basic') === p && !r.vil.removed);
+  const col = (p, label, note) => { const l = by(p); return `<div class="plan-col"><div class="plan-h">${planBadge({ plan: p })}<b>${l.length}</b> ${l.length === 1 ? 'village' : 'villages'}</div><p class="hint">${note}</p><div class="chips">${l.length ? l.map(r => `<button type="button" class="chip" data-act="owner-manage" data-id="${esc(r.vil.id)}">${esc(r.v.name)}</button>`).join('') : '<span class="hint">None</span>'}</div></div>`; };
+  return `<section class="panel"><div class="panel-h"><div><h2>Plans in use</h2><p>Which package each village or association runs on. Click a name to change its plan.</p></div></div><div class="plan-cols">${col('premium', 'Premium', 'Receipts carry the village name and logo.')}${col('basic', 'Basic', 'Standard receipts.')}</div></section>`;
+}
 
 /* ---------- Keep open tabs in step: when another tab (for example the admin verifying a payment) saves
    a village, this tab picks up the change by itself ---------- */
