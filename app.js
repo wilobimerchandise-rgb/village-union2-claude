@@ -13,6 +13,8 @@ const CONFIG = {
   DEMO_MODE: true,                       // set false to hide the demo login hints
   SHOW_MEMBER_NAMES_IN_VILLAGE_LEDGER: true,
   PER_PAGE: 12,
+  MAX_ATTEMPTS: 3,                       // wrong sign-ins allowed before the member is told to contact the admin
+  LOCK_SECONDS: 60,
   MAX_IMAGE_PX: 1200,
   MAX_PDF_KB: 600,
   OWNER_ID: 'OWNER',                     // master admin sign-in (hidden, opened with #owner)
@@ -67,7 +69,11 @@ const short = n => {
   if (n >= 1e3) return '₦' + (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
   return '₦' + Math.round(n);
 };
-const levyOf = id => LEVIES.find(l => l.id === id) || { id, name: id, color: '#888', fixed: false };
+/* Levy categories live in each village's own data (levyList) so admins can add, edit and remove them. */
+const levyAll = () => (typeof S !== 'undefined' && S && S.v && S.v.levyList) ? S.v.levyList : LEVIES;
+const levies = () => levyAll().filter(l => !l.removed);
+const levyOf = id => levyAll().find(l => l.id === id) || { id, name: id, color: '#888', fixed: false };
+const liveVillages = () => VILLAGES.filter(v => !v.removed);
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 const stamp = () => new Date().toISOString();
 
@@ -164,6 +170,31 @@ async function seedVillage(vil) {
   return { id: vil.id, name: vil.name, code, settings, users, tx, expenses, audit, seq: { tx: seq, exp: items.length, aud: lseq, mbr: 22 }, seededAt: stamp() };
 }
 
+/* ---------- Bring older saved data up to date (adds the newer fields) ---------- */
+const PALETTE = ['#1A1A4E', '#D2395B', '#12806A', '#F5B83D', '#6C5CE7', '#0E7490', '#B45309', '#9D174D', '#4D7C0F', '#7C3AED'];
+const BANKS = ['First Bank of Nigeria', 'Guaranty Trust Bank', 'Access Bank', 'United Bank for Africa', 'Zenith Bank', 'Fidelity Bank'];
+function migrate(v) {
+  v.settings = v.settings || { levies: {} }; v.settings.levies = v.settings.levies || {};
+  if (!v.levyList) v.levyList = LEVIES.map(l => ({ id: l.id, name: l.name, fixed: l.fixed, color: l.color }));
+  v.levyList.forEach(l => { if (v.settings.levies[l.id] == null) v.settings.levies[l.id] = 0; });
+  const R = rng(v.id + 'mig');
+  if (!v.settings.accounts) v.settings.accounts = [{ id: 'B1', bank: BANKS[Math.floor(R() * BANKS.length)], number: String(Math.floor(1000000000 + R() * 8999999999)), name: `${v.name} Union` }];
+  if (v.settings.payNote == null) v.settings.payNote = 'Pay into the account above, then upload your proof of payment on this site. Never pay cash to anyone except the treasurer.';
+  v.plan = v.plan || (['umuokpu', 'amakwu', 'ezinkwo'].indexOf(v.id) >= 0 ? 'premium' : 'basic');
+  if (v.logo === undefined) v.logo = null;
+  v.requests = v.requests || []; v.credLog = v.credLog || []; v.seq = v.seq || {};
+  if (!v.meetings) {
+    const admins = v.users.filter(u => u.role === 'admin'), members = v.users.filter(u => u.role === 'member' && u.active), now = new Date(); v.meetings = [];
+    [[9, 'General meeting'], [41, 'Executive and elders meeting'], [74, 'General meeting'], [118, 'Annual general meeting']].forEach((m, i) => {
+      const d = new Date(now.getTime() - 864e5 * m[0]), adm = admins[1 + (i % 2)] || admins[0];
+      const marks = members.filter(() => R() < .72).map(u => ({ memberId: u.id, at: new Date(d.getTime() + 36e5 * (15 + R() * 2)).toISOString(), status: 'verified', by: adm.name, byId: adm.id, byAt: new Date(d.getTime() + 36e5 * 20).toISOString() }));
+      v.meetings.push({ id: `${v.code}-G${String(i + 1).padStart(3, '0')}`, title: m[1], date: ymd(d), status: 'closed', openedBy: adm.name, openedById: adm.id, openedAt: new Date(d.getTime() + 36e5 * 14).toISOString(), closedAt: new Date(d.getTime() + 36e5 * 19).toISOString(), marks });
+    });
+    v.seq.mtg = v.meetings.length;
+  }
+  return v;
+}
+
 /* ---------- Database layer (one record per village) ---------- */
 const DB = {
   cache: {},
@@ -172,7 +203,8 @@ const DB = {
     const vil = VILLAGES.find(v => v.id === id); if (!vil) throw new Error('Unknown village.');
     let data = null; const raw = lsGet('vv_v1_' + id);
     if (raw) { try { data = JSON.parse(raw); } catch (_) { data = null; } }
-    if (!data) { data = await seedVillage(vil); lsSet('vv_v1_' + id, JSON.stringify(data)); }
+    if (!data) { data = await seedVillage(vil); }
+    migrate(data); lsSet('vv_v1_' + id, JSON.stringify(data));
     this.cache[id] = data; return data;
   },
   save(v) { return lsSet('vv_v1_' + v.id, JSON.stringify(v)); }
@@ -186,19 +218,21 @@ const OWN = {
     if (this.data) return this.data;
     this.data = this.peek();
     if (!this.data) {
-      this.data = { id: CONFIG.OWNER_ID, name: 'Platform Owner', hash: await hashPw('owner', CONFIG.OWNER_ID, CONFIG.OWNER_DEFAULT_PASSWORD), defaultPw: true, names: {}, log: [] };
+      this.data = { id: CONFIG.OWNER_ID, name: 'Platform Owner', hash: await hashPw('owner', CONFIG.OWNER_ID, CONFIG.OWNER_DEFAULT_PASSWORD), defaultPw: true, names: {}, removed: {}, log: [] };
       this.save();
     }
-    this.data.names = this.data.names || {}; this.data.log = this.data.log || [];
+    this.data.names = this.data.names || {}; this.data.removed = this.data.removed || {}; this.data.log = this.data.log || [];
     this.data.email = CONFIG.PLATFORM_OWNER_EMAIL;
     return this.data;
   },
   save() { if (!lsSet('vv_owner_v1', JSON.stringify(this.data))) warnStorage(); }
 };
-// Apply village names the owner has changed (read before anything is shown)
+// Apply village names changed by the owner or by a village admin, and hide villages the owner removed
+function readPubNames() { try { return JSON.parse(lsGet('vv_names_v1') || '{}'); } catch (_) { return {}; } }
+function setPubName(id, name) { const p = readPubNames(); p[id] = name; lsSet('vv_names_v1', JSON.stringify(p)); }
 (function applyNameOverrides() {
-  const o = OWN.peek(); if (!o || !o.names) return;
-  VILLAGES.forEach(v => { if (o.names[v.id]) v.name = o.names[v.id]; });
+  const o = OWN.peek() || {}, pub = readPubNames();
+  VILLAGES.forEach(v => { if (o.names && o.names[v.id]) v.name = o.names[v.id]; if (pub[v.id]) v.name = pub[v.id]; if (o.removed && o.removed[v.id]) v.removed = true; });
 })();
 
 /* ---------- App state ---------- */
@@ -208,8 +242,12 @@ const userById = id => S.v.users.find(u => u.id === id);
 const nameOf = id => (userById(id) || { name: 'Former member' }).name;
 
 /* ---------- Permission-checked data operations ---------- */
-function requireAdmin() { if (!S.u || S.u.role !== 'admin' || !S.u.active) throw new Error('Only a village admin can do this.'); }
+const isReadonly = () => !!S.v && S.v.status === 'readonly' && !S.owner;
+function requireWritable() { if (isReadonly()) throw new Error('This village is in read-only mode right now. Contact VillageVault support.'); }
+function requireAdmin() { if (!S.u || S.u.role !== 'admin' || !S.u.active) throw new Error('Only a village admin can do this.'); requireWritable(); }
 function log(action, target, detail) {
+  // Anything the owner does inside a village goes to the owner's private log only, so villages never see it.
+  if (S.owner) { olog(action, S.v.name, `${target}: ${detail}`); OWN.save(); return; }
   S.v.seq.aud = (S.v.seq.aud || 0) + 1;
   S.v.audit.push({ id: 'L' + S.v.seq.aud, ts: stamp(), adminId: S.u.id, adminName: S.u.name, adminTitle: S.u.title, action, target, detail });
 }
@@ -243,6 +281,7 @@ function stampUpdate(rec, changes, kind) {
 const API = {
   submitProof(d) {
     if (isAdmin()) throw new Error('Admins record payments from the Transactions page.');
+    requireWritable();
     const t = { id: nextId('tx', 'T'), memberId: S.u.id, levy: d.levy, amount: d.amount, date: d.date, method: d.method, ref: d.ref, note: d.note || '', status: 'pending', proof: d.proof, submittedAt: stamp(), submittedBy: S.u.name, updatedBy: null, updatedAt: null, history: [] };
     S.v.tx.push(t); commit(); return t;
   },
@@ -292,8 +331,8 @@ const API = {
   addMember(d) {
     requireAdmin();
     const id = nextId('mbr', 'M'); return hashPw(S.v.id, id, d.password).then(h => {
-      const u = { id, name: d.name, role: 'member', title: 'Member', ward: d.ward, phone: d.phone, email: d.email || '', joined: today(), active: true, hash: h, createdBy: S.u.name, createdAt: stamp() };
-      S.v.users.push(u); log('Added member', id, `${u.name} (${u.ward})`); commit(); return u;
+      const u = { id, name: d.name, role: 'member', title: 'Member', ward: d.ward, phone: d.phone, email: d.email || '', joined: today(), active: true, hash: h, mustChange: true, tempPw: d.password, createdBy: S.u.name, createdAt: stamp() };
+      S.v.users.push(u); S.v.credLog.push({ memberId: id, by: S.u.name, at: stamp(), kind: 'issued' }); log('Added member', id, `${u.name} (${u.ward})`); commit(); return u;
     });
   },
   editMember(id, d) {
@@ -305,7 +344,7 @@ const API = {
   },
   resetPassword(id, pw) {
     requireAdmin(); const u = userById(id); if (!u) throw new Error('Member not found.');
-    return hashPw(S.v.id, u.id, pw).then(h => { u.hash = h; u.updatedBy = S.u.name; u.updatedAt = stamp(); log('Reset member password', id, `Password reset for ${u.name}`); commit(); });
+    return hashPw(S.v.id, u.id, pw).then(h => { u.hash = h; u.mustChange = true; u.tempPw = pw; u.rememberTokens = []; S.v.credLog.push({ memberId: u.id, by: S.u.name, at: stamp(), kind: 'reset' }); u.updatedBy = S.u.name; u.updatedAt = stamp(); log('Reset member password', id, `Password reset for ${u.name}`); commit(); });
   },
   saveExpense(id, d) {
     requireAdmin();
@@ -325,7 +364,7 @@ const API = {
   },
   saveLevies(vals) {
     requireAdmin(); const ch = [];
-    LEVIES.filter(l => l.fixed).forEach(l => { const o = S.v.settings.levies[l.id], n = Number(vals[l.id]); if (o !== n) { ch.push(`${l.name}: ${money(o)} to ${money(n)}`); S.v.settings.levies[l.id] = n; } });
+    levies().filter(l => l.fixed).forEach(l => { const o = S.v.settings.levies[l.id], n = Number(vals[l.id]); if (o !== n) { ch.push(`${l.name}: ${money(o)} to ${money(n)}`); S.v.settings.levies[l.id] = n; } });
     if (!ch.length) throw new Error('No amounts were changed.');
     log('Changed levy amounts', 'Settings', ch.join('; ')); commit();
   },
@@ -341,7 +380,7 @@ const API = {
   },
   async changePassword(cur, nw) {
     const h = await hashPw(S.v.id, S.u.id, cur); if (h !== S.u.hash) throw new Error('Your current password is not correct.');
-    S.u.hash = await hashPw(S.v.id, S.u.id, nw); if (isAdmin()) log('Changed own password', S.u.id, 'Admin changed their password'); commit();
+    S.u.hash = await hashPw(S.v.id, S.u.id, nw); S.u.mustChange = false; delete S.u.tempPw; S.u.rememberTokens = []; if (isAdmin()) log('Changed own password', S.u.id, 'Admin changed their password'); commit();
   }
 };
 
@@ -349,10 +388,15 @@ const API = {
 function memberPaid(id, year) { return villageTx().filter(t => t.memberId === id && yearOf(t.date) === year); }
 function memberOutstanding(id, year) {
   const paid = memberPaid(id, year); let o = 0;
-  LEVIES.filter(l => l.fixed).forEach(l => { o += Math.max(0, S.v.settings.levies[l.id] - sum(paid.filter(t => t.levy === l.id))); });
+  levies().filter(l => l.fixed).forEach(l => { o += Math.max(0, (S.v.settings.levies[l.id] || 0) - sum(paid.filter(t => t.levy === l.id))); });
   return o;
 }
-const expectedPerMember = () => LEVIES.filter(l => l.fixed).reduce((a, l) => a + S.v.settings.levies[l.id], 0);
+// What a member owes, levy by levy (only verified payments count, so it updates by itself once an admin verifies)
+function owingRows(id, yr) {
+  const paid = memberPaid(id, yr);
+  return levies().filter(l => l.fixed).map(l => { const need = S.v.settings.levies[l.id] || 0, p = sum(paid.filter(t => t.levy === l.id)); return { L: l, need, paid: p, owe: Math.max(0, need - p) }; });
+}
+const expectedPerMember = () => levies().filter(l => l.fixed).reduce((a, l) => a + (S.v.settings.levies[l.id] || 0), 0);
 function monthlySeries(txs, months = 12) {
   const out = [], now = new Date();
   for (let i = months - 1; i >= 0; i--) {
@@ -376,7 +420,8 @@ const ICON = {
   sliders: '<path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   out: '<path d="M9 4H5v16h4M16 8l4 4-4 4M20 12H9"/>',
-  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>'
+  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  book: '<path d="M4 5a2 2 0 012-2h13v16H6a2 2 0 00-2 2zM4 19V5M9 7h6M9 11h6"/>'
 };
 const icon = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[n] || ''}</svg>`;
 
@@ -409,7 +454,7 @@ function formError(msg, id = 'mError') { const el = $('#' + id); if (!el) return
 
 /* ---------- Form pieces ---------- */
 const opt = (v, l, sel) => `<option value="${esc(v)}"${String(v) === String(sel) ? ' selected' : ''}>${esc(l)}</option>`;
-const levyOpts = (sel, all) => (all ? opt('', all, sel) : '') + LEVIES.map(l => opt(l.id, l.name, sel)).join('');
+const levyOpts = (sel, all) => (all ? opt('', all, sel) : '') + levyAll().filter(l => !l.removed || l.id === sel).map(l => opt(l.id, l.name + (l.removed ? ' (removed)' : ''), sel)).join('');
 const methodOpts = sel => METHODS.map(m => opt(m, m, sel)).join('');
 const wardOpts = (sel, all) => (all ? opt('', all, sel) : '') + WARDS.map(w => opt(w, w, sel)).join('');
 const memberOpts = (sel, all, onlyActive) => (all ? opt('', all, sel) : '') + S.v.users.filter(u => u.role === 'member' && (!onlyActive || u.active || u.id === sel)).map(u => opt(u.id, `${u.name} (${u.id})`, sel)).join('');
@@ -482,6 +527,7 @@ function donut(parts) {
   const legend = parts.map(p => `<span><i class="dot" style="background:${p.color}"></i>${esc(p.label)} <b style="color:var(--indigo)">${money(p.value)}</b></span>`).join('');
   return `<div class="donut-wrap"><svg class="donut" viewBox="0 0 42 42" width="150" height="150" role="img" aria-label="Income by levy"><circle cx="21" cy="21" r="15.9155" fill="none" stroke="#E6ECE9" stroke-width="6"/>${segs}<text x="21" y="22" text-anchor="middle" font-size="5.2" font-weight="800" fill="#1A1A4E">${short(total)}</text><text x="21" y="27" text-anchor="middle" font-size="2.6" fill="#5B5F7A">verified</text></svg><div class="legend" style="flex-direction:column;margin:0">${legend}</div></div>`;
 }
+const kpiLink = (act, l, v, s, tone, extra) => `<button type="button" class="kpi click ${tone || ''}" data-act="${act}"${extra || ''}><div class="kpi-l">${l}</div><div class="kpi-v">${v}</div>${s ? `<div class="kpi-s">${s}</div>` : ''}<span class="kpi-go" aria-hidden="true">View details &rsaquo;</span></button>`;
 const kpi = (l, v, s, tone) => `<div class="kpi ${tone || ''}"><div class="kpi-l">${l}</div><div class="kpi-v">${v}</div>${s ? `<div class="kpi-s">${s}</div>` : ''}</div>`;
 function csvDownload(name, rows) {
   const txt = rows.map(r => r.map(c => `"${String(c == null ? '' : c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
@@ -502,7 +548,7 @@ function buildReport(kind, year, month, memberId) {
   const ex = memberId ? [] : activeExp();
   const before = tx.filter(t => t.date < start), inR = tx.filter(t => t.date >= start && t.date <= end);
   const exBefore = ex.filter(e => e.date < start), exIn = ex.filter(e => e.date >= start && e.date <= end);
-  const byLevy = LEVIES.map(l => { const a = inR.filter(t => t.levy === l.id); return { id: l.id, name: l.name, color: l.color, count: a.length, amount: sum(a) }; });
+  const byLevy = levyAll().filter(l => !l.removed || inR.some(t => t.levy === l.id)).map(l => { const a = inR.filter(t => t.levy === l.id); return { id: l.id, name: l.name, color: l.color, count: a.length, amount: sum(a) }; });
   const pend = pendingTx().filter(t => !memberId || t.memberId === memberId);
   const rep = {
     kind, year, month, memberId, start, end, periodLabel, village: v.name,
@@ -519,8 +565,8 @@ function buildReport(kind, year, month, memberId) {
   rep.cf = rep.bf + rep.income - rep.expense;
   if (!memberId) {
     rep.members = v.users.filter(u => u.role === 'member').map(u => {
-      const per = {}; LEVIES.forEach(l => { per[l.id] = sum(inR.filter(t => t.memberId === u.id && t.levy === l.id)); });
-      return { id: u.id, name: u.name, per, total: LEVIES.reduce((a, l) => a + per[l.id], 0), active: u.active };
+      const per = {}; levyAll().forEach(l => { per[l.id] = sum(inR.filter(t => t.memberId === u.id && t.levy === l.id)); });
+      return { id: u.id, name: u.name, per, total: levyAll().reduce((a, l) => a + per[l.id], 0), active: u.active };
     }).filter(m => m.active || m.total > 0).sort((a, b) => a.name.localeCompare(b.name));
   }
   if (kind === 'year') {
@@ -532,7 +578,8 @@ function buildReport(kind, year, month, memberId) {
 /* ---------- Minimal PDF writer (no libraries needed) ---------- */
 const HELV = [278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,556,556,333,500,278,556,500,722,500,500,500,334,260,334,584];
 class PDF {
-  constructor(w, h) { this.W = w || 595.28; this.H = h || 841.89; this.pages = []; this.add(); }
+  constructor(w, h) { this.W = w || 595.28; this.H = h || 841.89; this.pages = []; this.imgs = []; this.add(); }
+  img(dataUrl, x, y, w, h) { try { const bin = atob(String(dataUrl).split(',')[1]); this.imgs.push({ bin, w: 200, h: 200 }); this.p.push(`q ${w.toFixed(2)} 0 0 ${h.toFixed(2)} ${x.toFixed(2)} ${(this.H - y - h).toFixed(2)} cm /Im${this.imgs.length - 1} Do Q`); } catch (_) {} }
   add() { this.p = []; this.pages.push(this.p); return this.p; }
   static a(s) { return String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/₦/g, 'N').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, '-').replace(/[^\x20-\x7E]/g, '?'); }
   w(s, size, bold) { s = PDF.a(s); let t = 0; for (let i = 0; i < s.length; i++) t += HELV[s.charCodeAt(i) - 32] || 556; return t * size / 1000 * (bold ? 1.05 : 1); }
@@ -551,10 +598,11 @@ class PDF {
     objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
     objs[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
     objs[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
-    let id = 5;
+    let id = 5; const xo = [];
+    this.imgs.forEach((im, i) => { const oid = id++; xo.push(`/Im${i} ${oid} 0 R`); objs[oid] = `<< /Type /XObject /Subtype /Image /Width ${im.w} /Height ${im.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${im.bin.length} >>\nstream\n${im.bin}\nendstream`; });
     this.pages.forEach(pg => {
       const pid = id++, cid = id++, stream = pg.join('\n'); kids.push(pid + ' 0 R');
-      objs[pid] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${this.W} ${this.H}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${cid} 0 R >>`;
+      objs[pid] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${this.W} ${this.H}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >>${xo.length ? ` /XObject << ${xo.join(' ')} >>` : ''} >> /Contents ${cid} 0 R >>`;
       objs[cid] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`;
     });
     objs[2] = `<< /Type /Pages /Kids [${kids.join(' ')}] /Count ${kids.length} >>`;
@@ -657,10 +705,10 @@ function downloadReport(kind, year, month, memberId) {
 /* ---------- Shell and navigation ---------- */
 const NAV = {
   member: [['overview', 'My dashboard', 'home'], ['village', 'Village dashboard', 'village']],
-  admin: [['overview', 'Overview', 'home'], ['verify', 'Verify payments', 'check'], ['transactions', 'Transactions', 'list'], ['members', 'Members', 'users'], ['expenses', 'Expenditure', 'coin'], ['levies', 'Levy amounts', 'sliders'], ['reports', 'Reports', 'file'], ['audit', 'Activity log', 'clock']],
+  admin: [['overview', 'Overview', 'home'], ['verify', 'Verify payments', 'check'], ['transactions', 'Transactions', 'list'], ['outstanding', 'Outstanding bills', 'coin'], ['members', 'Members', 'users'], ['register', 'Register', 'book'], ['expenses', 'Expenditure', 'coin'], ['levies', 'Levy categories', 'sliders'], ['profile', 'Village profile', 'village'], ['reports', 'Reports', 'file'], ['audit', 'Activity log', 'clock']],
   owner: [['o-overview', 'All villages', 'home'], ['o-villages', 'Manage villages', 'village'], ['o-admins', 'Village admins', 'users'], ['o-sponsors', 'Sponsors', 'coin'], ['o-log', 'Owner activity', 'clock'], ['o-account', 'My account', 'user']]
 };
-const TITLES = { overview: 'Overview', village: 'Village dashboard', reports: 'Reports', verify: 'Verify payments', transactions: 'Transactions', members: 'Members', expenses: 'Expenditure', levies: 'Levy amounts', audit: 'Activity log', 'o-overview': 'All villages', 'o-villages': 'Manage villages', 'o-admins': 'Village admins', 'o-sponsors': 'Sponsors', 'o-log': 'Owner activity', 'o-account': 'My account' };
+const TITLES = { overview: 'Overview', village: 'Village dashboard', reports: 'Reports', verify: 'Verify payments', transactions: 'Transactions', members: 'Members', expenses: 'Expenditure', levies: 'Levy categories', outstanding: 'Outstanding bills', register: 'Register', profile: 'Village profile', audit: 'Activity log', 'o-overview': 'All villages', 'o-villages': 'Manage villages', 'o-admins': 'Village admins', 'o-sponsors': 'Sponsors', 'o-log': 'Owner activity', 'o-account': 'My account' };
 const inOwnerConsole = () => S.owner && !S.v;
 const roleKey = () => inOwnerConsole() ? 'owner' : (isAdmin() ? 'admin' : 'member');
 function pageTitleText() {
@@ -672,7 +720,7 @@ function renderApp() {
   const ownerMode = inOwnerConsole(), vil = ownerMode ? null : VILLAGES.find(v => v.id === S.v.id), rk = roleKey();
   const head = ownerMode
     ? `<div class="side-village"><div class="vbadge" style="background:#F5B83D;color:#1A1A4E">VV</div><div><b>Owner console</b><small>All villages</small></div></div>`
-    : `<div class="side-village"><div class="vbadge" style="background:${vil.color};color:#fff">${esc(vil.code)}</div><div><b>${esc(S.v.name)}</b><small>${S.owner ? 'Owner view' : 'Village union'}</small></div></div>`;
+    : `<div class="side-village">${S.v.logo ? `<img class="vlogo" src="${esc(S.v.logo)}" alt="">` : `<div class="vbadge" style="background:${vil.color};color:#fff">${esc(vil.code)}</div>`}<div><b>${esc(S.v.name)}</b><small>${S.owner ? 'Owner view' : 'Village or association'}</small></div></div>`;
   const who = ownerMode ? { n: OWN.data.name, s: 'Master admin' } : { n: S.u.name, s: S.owner ? 'Owner view of this village' : `${S.u.title}, ${S.u.id}` };
   const top = rk === 'member' ? '<button class="btn btn-saffron btn-sm" type="button" data-act="upload-proof">Upload proof</button>' : rk === 'admin' ? '<button class="btn btn-saffron btn-sm" type="button" data-act="add-tx">Add payment</button>' : '';
   $('#app').innerHTML = `<div class="shell">
@@ -684,6 +732,7 @@ function renderApp() {
         <div class="who"><div class="avatar">${esc(initials(who.n))}</div><div><b>${esc(who.n)}</b><small>${esc(who.s)}</small></div></div>
         ${S.owner && S.v ? '<button class="btn-out" type="button" data-act="owner-back">Back to owner console</button>' : ''}
         <button class="btn-out" type="button" data-act="change-pw">Change password</button>
+        ${S.v && !S.owner && rememberedFor(S.v.id) ? '<button class="btn-out" type="button" data-act="forget-device">Forget this device</button>' : ''}
         <button class="btn-out" type="button" data-act="logout">${icon('out')}Sign out</button>
       </div>
     </aside>
@@ -695,14 +744,14 @@ function renderApp() {
   renderView();
 }
 function renderNav() {
-  const rk = roleKey(), pend = rk === 'admin' ? pendingTx().length : 0;
-  $('#navlist').innerHTML = NAV[rk].map(n => `<button type="button" data-act="goto" data-page="${n[0]}" class="${S.page === n[0] ? 'active' : ''}"${S.page === n[0] ? ' aria-current="page"' : ''}>${icon(n[2])}${n[1]}${n[0] === 'verify' && pend ? `<span class="count">${pend}</span>` : ''}</button>`).join('');
+  const rk = roleKey(), pend = rk === 'admin' ? pendingTx().length : 0, regN = rk === 'admin' ? S.v.requests.filter(r => r.status === 'new').length + S.v.meetings.reduce((a, m) => a + m.marks.filter(k => k.status === 'pending').length, 0) : 0, owN = rk === 'admin' ? owingList(new Date().getFullYear(), {}).length : 0;
+  $('#navlist').innerHTML = NAV[rk].map(n => `<button type="button" data-act="goto" data-page="${n[0]}" class="${S.page === n[0] ? 'active' : ''}"${S.page === n[0] ? ' aria-current="page"' : ''}>${icon(n[2])}${n[1]}${n[0] === 'verify' && pend ? `<span class="count">${pend}</span>` : ''}${n[0] === 'register' && regN ? `<span class="count">${regN}</span>` : ''}${n[0] === 'outstanding' && owN ? `<span class="count count-soft">${owN}</span>` : ''}</button>`).join('');
 }
 function renderView() {
   const ae = document.activeElement, keep = ae && ae.dataset ? { k: ae.dataset.filter, s: ae.selectionStart, e: ae.selectionEnd } : null;
   const rk = roleKey(), fn = (VIEWS[rk] || {})[S.page] || VIEWS[rk][NAV[rk][0][0]];
   $('#pageTitle').textContent = pageTitleText();
-  $('#pageSub').textContent = rk === 'owner' ? 'Platform owner' : `${S.v.name} Village Union${S.owner ? ' (owner view)' : ''}`;
+  $('#pageSub').textContent = rk === 'owner' ? 'Platform owner' : `${S.v.name}${S.owner ? ' (owner view)' : ''}`;
   renderNav();
   $('#view').innerHTML = fn();
   if (keep && keep.k) { const el = $(`[data-filter="${keep.k}"]`); if (el) { el.focus(); try { if (keep.s != null) el.setSelectionRange(keep.s, keep.e); } catch (_) {} } }
@@ -721,7 +770,7 @@ function txRow(t, admin) {
   const upd = t.updatedBy && (t.history || []).some(h => h.kind === 'edit') ? `<small>Edited by ${esc(t.updatedBy)}, ${esc(fmtTS(t.updatedAt))}</small>` : '';
   const act = admin ? `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="view-tx" data-id="${t.id}">View</button>${t.status === 'pending' ? `<button class="btn btn-leaf btn-sm" type="button" data-act="verify-tx" data-id="${t.id}">Verify</button>` : ''}${t.status === 'verified' ? `<button class="btn btn-saffron btn-sm" type="button" data-act="receipt" data-id="${t.id}">Receipt</button>` : ''}${t.status !== 'void' ? `<button class="btn btn-ghost btn-sm" type="button" data-act="edit-tx" data-id="${t.id}">Edit</button><button class="btn btn-ghost btn-sm" type="button" data-act="void-tx" data-id="${t.id}">Void</button>` : ''}</div>` : `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="view-tx" data-id="${t.id}">View</button></div>`;
   return [esc(fmtDate(t.date)), `<span class="dot" style="background:${levyOf(t.levy).color}"></span>${esc(levyOf(t.levy).name)}`]
-    .concat(admin ? [`${esc(nameOf(t.memberId))}<small>${esc(t.memberId)}</small>`] : [])
+    .concat(admin ? [`<button type="button" class="linkbtn" data-act="member-profile" data-id="${esc(t.memberId)}">${esc(nameOf(t.memberId))}</button><small>${esc(t.memberId)}</small>`] : [])
     .concat([esc(t.ref || '-'), money(t.amount), `${badge(t.status)}${t.status === 'rejected' && t.rejectReason ? `<small>${esc(t.rejectReason)}</small>` : ''}`, who + upd, act]);
 }
 function txTable(list, admin) {
@@ -754,14 +803,16 @@ function greeting() { const h = new Date().getHours(); return h < 12 ? 'Good mor
 const MEMBER = {
   overview() {
     const yr = new Date().getFullYear(), mine = myTx(), ver = mine.filter(t => t.status === 'verified' && yearOf(t.date) === yr), pend = mine.filter(t => t.status === 'pending'), rej = mine.filter(t => t.status === 'rejected');
-    const rows = LEVIES.map(L => { const p = sum(ver.filter(t => t.levy === L.id)), need = L.fixed ? S.v.settings.levies[L.id] : 0; return { L, p, need }; });
+    const rows = levies().map(L => { const p = sum(ver.filter(t => t.levy === L.id)), need = L.fixed ? S.v.settings.levies[L.id] : 0; return { L, p, need }; });
     const out = memberOutstanding(S.u.id, yr), last = mine.filter(t => t.status === 'verified').sort((a, b) => b.date.localeCompare(a.date))[0];
     return `<div><h2 style="font-size:1.7rem">${greeting()}, ${esc(S.u.name.split(' ')[0])}.</h2><p class="muted">Here is where your payments stand for ${yr}.</p></div>
     ${rej.length ? `<div class="callout"><div><b>${rej.length} payment${rej.length > 1 ? 's were' : ' was'} rejected</b><p>See the reason in your payment records below, then upload the proof again.</p></div><button class="btn btn-primary btn-sm" type="button" data-act="upload-proof">Upload proof</button></div>` : ''}
-    <div class="kpis">${kpi('Paid in ' + yr, money(sum(ver)), `${ver.length} verified payment${ver.length === 1 ? '' : 's'}`, 'hot')}${kpi('Still to pay', money(out), out ? 'Based on fixed levies' : 'You are up to date', out ? 'bad' : 'good')}${kpi('Awaiting verification', String(pend.length), pend.length ? money(sum(pend)) + ' with the admin' : 'Nothing pending')}${kpi('Last verified payment', last ? esc(fmtDate(last.date)) : 'None yet', last ? esc(levyOf(last.levy).name) : '')}</div>
+    <div class="kpis">${kpi('Paid in ' + yr, money(sum(ver)), `${ver.length} verified payment${ver.length === 1 ? '' : 's'}`, 'hot')}${kpiLink('my-owing', 'Still to pay', money(out), out ? 'Tap to see what you owe and how to pay' : 'You are up to date', out ? 'bad' : 'good')}${kpi('Awaiting verification', String(pend.length), pend.length ? money(sum(pend)) + ' with the admin' : 'Nothing pending')}${kpi('Last verified payment', last ? esc(fmtDate(last.date)) : 'None yet', last ? esc(levyOf(last.levy).name) : '')}</div>
     <div class="grid-2"><section class="panel"><div class="panel-h"><div><h2>Your levies this year</h2><p>Verified payments against the amount set by your village</p></div><button class="btn btn-primary btn-sm" type="button" data-act="upload-proof">Upload proof</button></div>
       <div class="progress-list">${rows.map(r => { const pc = r.need ? Math.min(100, r.p / r.need * 100) : 0; return `<div><div class="prog-top"><b>${esc(r.L.name)}</b><span>${r.L.fixed ? `${money(r.p)} of ${money(r.need)}` : `${money(r.p)} given`}</span></div><div class="bar"><i style="width:${r.L.fixed ? pc : (r.p ? 100 : 0)}%;--c:${r.L.color}"></i></div></div>`; }).join('')}</div></section>
     <section class="panel"><div class="panel-h"><h2>Recent activity</h2></div><div class="list">${mine.slice().sort((a, b) => b.submittedAt.localeCompare(a.submittedAt)).slice(0, 6).map(t => `<div class="list-item"><div><b>${esc(levyOf(t.levy).name)}</b><small>${esc(fmtDate(t.date))}, ${money(t.amount)}</small></div>${badge(t.status)}</div>`).join('') || '<div class="empty"><b>No payments yet</b>Upload your first proof of payment.</div>'}</div></section></div>
+    ${paymentPanel()}
+    ${attendanceMember()}
     ${sponsorsPanel()}
     ${MEMBER.records()}`;
   },
@@ -787,10 +838,13 @@ const MEMBER = {
       const list = ex.slice().sort((a, b) => b.date.localeCompare(a.date)), page = paginate(list, f);
       body = table(['Date', 'Category', 'Description', { t: 'Amount', num: true }], page.map(e => [esc(fmtDate(e.date)), esc(e.category), esc(e.description), money(e.amount)]), ['No spending recorded', '']) + pager(list.length, f.page, CONFIG.PER_PAGE);
     }
-    return `<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center"><p class="muted">Read-only view of ${esc(S.v.name)}'s collections and spending. Only village admins can change records.</p><button class="btn btn-primary btn-sm" type="button" data-act="report-modal" data-scope="village">Download village report</button></div>
+    return `<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center"><p class="muted">Read-only view of ${esc(S.v.name)}'s collections, spending and admin activity. Only admins can change records.</p><button class="btn btn-primary btn-sm" type="button" data-act="report-modal" data-scope="village">Download village report</button></div>
     <div class="kpis">${kpi('Village balance', money(bal), 'All income less all spending', 'hot')}${kpi('Collected in ' + yr, money(sum(inY)), `${inY.length} verified payments`)}${kpi('Spent in ' + yr, money(sum(exY)), `${exY.length} items`)}${kpi('Active members', String(S.v.users.filter(u => u.role === 'member' && u.active).length), '')}</div>
     <div class="grid-2"><section class="panel"><div class="panel-h"><div><h2>Collections, last 12 months</h2><p>Verified payments only</p></div></div>${barChart(monthlySeries(ver))}</section>
-    <section class="panel"><div class="panel-h"><h2>Income by levy in ${yr}</h2></div>${donut(LEVIES.map(l => ({ label: l.name, color: l.color, value: sum(inY.filter(t => t.levy === l.id)) })))}</section></div>
+    <section class="panel"><div class="panel-h"><h2>Income by levy in ${yr}</h2></div>${donut(levyAll().map(l => ({ label: l.name, color: l.color, value: sum(inY.filter(t => t.levy === l.id)) })))}</section></div>
+    ${paymentPanel()}
+    ${activityFeed()}
+    ${attendanceRegisterView()}
     <section class="panel"><div class="panel-h"><div class="tabs" role="tablist"><button type="button" role="tab" data-act="tab" data-tab="collections" class="${tab === 'collections' ? 'active' : ''}" aria-selected="${tab === 'collections'}">Collections</button><button type="button" role="tab" data-act="tab" data-tab="spending" class="${tab === 'spending' ? 'active' : ''}" aria-selected="${tab === 'spending'}">Spending</button></div></div>${body}</section>`;
   }
 };
@@ -846,13 +900,15 @@ const ADMIN = {
     const yr = new Date().getFullYear(), ver = villageTx(), ex = activeExp(), inY = ver.filter(t => yearOf(t.date) === yr), exY = ex.filter(e => yearOf(e.date) === yr), pend = pendingTx();
     const behind = S.v.users.filter(u => u.role === 'member' && u.active).map(u => ({ u, o: memberOutstanding(u.id, yr) })).filter(x => x.o > 0).sort((a, b) => b.o - a.o);
     const recent = S.v.audit.slice().sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, 6);
-    return `<div><h2 style="font-size:1.7rem">${greeting()}, ${esc(S.u.name.split(' ')[0])}.</h2><p class="muted">${esc(S.u.title)}, ${esc(S.v.name)} Village Union</p></div>
+    return `<div><h2 style="font-size:1.7rem">${greeting()}, ${esc(S.u.name.split(' ')[0])}.</h2><p class="muted">${esc(S.u.title)}, ${esc(S.v.name)}</p></div>
+    ${S.v.requests.filter(r => r.status === 'new').length ? `<div class="callout"><div><b>${S.v.requests.filter(r => r.status === 'new').length} member${S.v.requests.filter(r => r.status === 'new').length > 1 ? 's are' : ' is'} asking for login details</b><p>Check each name against your register before you send anything.</p></div><button class="btn btn-primary btn-sm" type="button" data-act="open-requests">See requests</button></div>` : ''}
     ${pend.length ? `<div class="callout"><div><b>${pend.length} payment${pend.length > 1 ? 's are' : ' is'} waiting for verification</b><p>${money(sum(pend))} is not in the books until you check the proof.</p></div><button class="btn btn-primary btn-sm" type="button" data-act="goto" data-page="verify">Review now</button></div>` : `<div class="callout ok"><div><b>Everything is verified</b><p>No payments are waiting for you.</p></div></div>`}
-    <div class="kpis">${kpi('Collected in ' + yr, money(sum(inY)), `${inY.length} verified payments`, 'hot')}${kpi('Spent in ' + yr, money(sum(exY)), `${exY.length} items`)}${kpi('Village balance', money(sum(ver) - sum(ex)), 'All income less all spending', 'good')}${kpi('Members behind', String(behind.length), `${money(sum(behind, 'o'))} outstanding`, behind.length ? 'bad' : '')}</div>
+    <div class="kpis">${kpiLink('kpi-collected', 'Collected in ' + yr, money(sum(inY)), `${inY.length} verified payments`, 'hot')}${kpiLink('kpi-spent', 'Spent in ' + yr, money(sum(exY)), `${exY.length} items`)}${kpiLink('kpi-balance', 'Village balance', money(sum(ver) - sum(ex)), 'All income less all spending', 'good')}${kpiLink('goto', 'Members behind', String(behind.length), `${money(sum(behind, 'o'))} outstanding. Tap to see who`, behind.length ? 'bad' : '', ' data-page="outstanding"')}</div>
     <div class="grid-2"><section class="panel"><div class="panel-h"><div><h2>Collections, last 12 months</h2><p>Verified payments only</p></div></div>${barChart(monthlySeries(ver))}</section>
-    <section class="panel"><div class="panel-h"><h2>Income by levy in ${yr}</h2></div>${donut(LEVIES.map(l => ({ label: l.name, color: l.color, value: sum(inY.filter(t => t.levy === l.id)) })))}</section></div>
+    <section class="panel"><div class="panel-h"><h2>Income by levy in ${yr}</h2></div>${donut(levyAll().map(l => ({ label: l.name, color: l.color, value: sum(inY.filter(t => t.levy === l.id)) })))}</section></div>
+    ${paymentPanel()}
     <div class="grid-2e"><section class="panel"><div class="panel-h"><h2>Waiting for verification</h2><button class="btn btn-ghost btn-sm" type="button" data-act="goto" data-page="verify">See all</button></div><div class="list">${pend.slice(0, 5).map(t => `<div class="list-item"><div><b>${esc(nameOf(t.memberId))}</b><small>${esc(levyOf(t.levy).name)}, ${money(t.amount)}, ${esc(fmtDate(t.date))}</small></div><button class="btn btn-leaf btn-sm" type="button" data-act="verify-tx" data-id="${t.id}">Review</button></div>`).join('') || '<div class="empty"><b>All clear</b>New uploads will appear here.</div>'}</div></section>
-    <section class="panel"><div class="panel-h"><h2>Recent admin activity</h2><button class="btn btn-ghost btn-sm" type="button" data-act="goto" data-page="audit">Full log</button></div><div class="list">${recent.map(a => `<div class="list-item"><div><b>${esc(a.action)}</b><small>${esc(a.adminName)}, ${esc(fmtTS(a.ts))}</small></div></div>`).join('')}</div></section></div>
+    <section class="panel"><div class="panel-h"><h2>Recent admin activity</h2><button class="btn btn-ghost btn-sm" type="button" data-act="goto" data-page="audit">Full log</button></div><div class="list">${recent.map(a => `<button type="button" class="list-item rowbtn" data-act="audit-item" data-id="${esc(a.id)}"><div><b>${esc(a.action)}</b><small>${esc(a.adminName)}, ${esc(fmtTS(a.ts))}</small></div><span class="chev" aria-hidden="true">&rsaquo;</span></button>`).join('')}</div></section></div>
     ${sponsorsPanel(true)}`;
   },
   verify() {
@@ -879,7 +935,7 @@ const ADMIN = {
     <div class="toolbar"><div class="field grow2"><label for="fq">Search</label><input id="fq" class="input" type="search" data-filter="q" value="${esc(f.q || '')}" placeholder="Name or ID"></div>
     <div class="field"><label for="fw">Ward</label><select id="fw" class="select" data-filter="ward">${wardOpts(f.ward, 'All wards')}</select></div>
     <div class="field"><label for="fst">Account</label><select id="fst" class="select" data-filter="state">${opt('', 'All accounts', f.state)}${opt('active', 'Active', f.state)}${opt('off', 'Deactivated', f.state)}</select></div></div>
-    ${table(['Member', 'Ward', 'Phone', { t: 'Paid ' + yr, num: true }, { t: 'Still to pay', num: true }, 'Account', ''], page.map(u => [`${esc(u.name)}<small>${esc(u.id)}</small>`, esc(u.ward), esc(u.phone || '-'), money(sum(memberPaid(u.id, yr))), money(memberOutstanding(u.id, yr)), u.active ? '<span class="badge b-active">Active</span>' : '<span class="badge b-off">Deactivated</span>', `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="edit-member" data-id="${u.id}">Edit</button><button class="btn btn-ghost btn-sm" type="button" data-act="reset-pw" data-id="${u.id}">Reset password</button></div>`]), ['No members match', 'Try a different filter.'])}${pager(list.length, f.page, CONFIG.PER_PAGE)}</section>`;
+    ${table(['Member', 'Ward', 'Phone', { t: 'Paid ' + yr, num: true }, { t: 'Still to pay', num: true }, 'Account', ''], page.map(u => [`<button type="button" class="linkbtn" data-act="member-profile" data-id="${esc(u.id)}">${esc(u.name)}</button><small>${esc(u.id)}</small>`, esc(u.ward), esc(u.phone || '-'), money(sum(memberPaid(u.id, yr))), money(memberOutstanding(u.id, yr)), u.active ? '<span class="badge b-active">Active</span>' : '<span class="badge b-off">Deactivated</span>', `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="member-profile" data-id="${u.id}">Open</button><button class="btn btn-ghost btn-sm" type="button" data-act="edit-member" data-id="${u.id}">Edit</button><button class="btn btn-ghost btn-sm" type="button" data-act="reset-pw" data-id="${u.id}">Reset password</button></div>`]), ['No members match', 'Try a different filter.'])}${pager(list.length, f.page, CONFIG.PER_PAGE)}</section>`;
   },
   expenses() {
     const f = S.f, list = S.v.expenses.filter(e => (!f.cat || e.category === f.cat) && (!f.year || yearOf(e.date) === Number(f.year))).sort((a, b) => b.date.localeCompare(a.date)), page = paginate(list, f);
@@ -957,7 +1013,7 @@ const ACTIONS = {
     const pw = 'Vv' + Math.floor(100000 + Math.random() * 899999);
     openModal({ title: 'Add a member', sub: 'Give the member their ID and password. They can change the password after signing in.',
       body: `<div class="field"><label for="amN">Full name</label><input id="amN" name="name" class="input" maxlength="80" required></div><div class="form-row"><div class="field"><label for="amW">Ward</label><select id="amW" name="ward" class="select">${wardOpts('')}</select></div><div class="field"><label for="amP">Phone</label><input id="amP" name="phone" class="input" type="tel" maxlength="20"></div></div><div class="field"><label for="amE">Email (optional)</label><input id="amE" name="email" class="input" type="email" maxlength="80"></div><div class="field"><label for="amPw">Starting password</label><input id="amPw" name="password" class="input" type="text" value="${pw}" minlength="6" required></div>`,
-      submit: 'Add member', onSubmit: async fd => { const n = (fd.get('name') || '').trim(), p = fd.get('password') || ''; if (n.length < 3) throw new Error('Enter the member’s full name.'); if (p.length < 6) throw new Error('The password needs at least 6 characters.'); const u = await API.addMember({ name: n, ward: fd.get('ward'), phone: (fd.get('phone') || '').trim(), email: (fd.get('email') || '').trim(), password: p }); done(`${u.name} added. Their ID is ${u.id}.`); } });
+      submit: 'Add member', onSubmit: async fd => { const n = (fd.get('name') || '').trim(), p = fd.get('password') || ''; if (n.length < 3) throw new Error('Enter the member’s full name.'); if (p.length < 6) throw new Error('The password needs at least 6 characters.'); const u = await API.addMember({ name: n, ward: fd.get('ward'), phone: (fd.get('phone') || '').trim(), email: (fd.get('email') || '').trim(), password: p }); closeModal(); renderView(); toast(`${u.name} added.`, 'ok'); credModal(u.id); } });
   },
   'edit-member'(el) {
     const u = userById(el.dataset.id);
@@ -967,7 +1023,7 @@ const ACTIONS = {
   'reset-pw'(el) {
     const u = userById(el.dataset.id), pw = 'Vv' + Math.floor(100000 + Math.random() * 899999);
     openModal({ title: 'Reset password', sub: `${esc(u.name)} (${esc(u.id)})`, body: `<div class="field"><label for="rpP">New password</label><input id="rpP" name="password" class="input" type="text" value="${pw}" minlength="6" required><span class="hint">Tell the member this password. It is not stored in readable form.</span></div>`, submit: 'Reset password',
-      onSubmit: async fd => { const p = fd.get('password') || ''; if (p.length < 6) throw new Error('The password needs at least 6 characters.'); await API.resetPassword(u.id, p); done('Password reset.'); } });
+      onSubmit: async fd => { const p = fd.get('password') || ''; if (p.length < 6) throw new Error('The password needs at least 6 characters.'); await API.resetPassword(u.id, p); closeModal(); renderView(); credModal(u.id); } });
   },
   'add-exp'() { expModal(null); },
   'edit-exp'(el) { expModal(S.v.expenses.find(e => e.id === el.dataset.id)); },
@@ -995,7 +1051,7 @@ const ACTIONS = {
   'upload-proof'() { uploadModal(); },
   'report-modal'(el) { reportModal(el.dataset.scope); },
   'change-pw'() { changePwModal(); },
-  'toggle-pw'(el) { const i = $('#loginPw'); const show = i.type === 'password'; i.type = show ? 'text' : 'password'; el.textContent = show ? 'Hide' : 'Show'; el.setAttribute('aria-label', show ? 'Hide password' : 'Show password'); },
+  'toggle-pw'(el) { const i = el.parentElement.querySelector('input'); if (!i) return; const show = i.type === 'password'; i.type = show ? 'text' : 'password'; el.textContent = show ? 'Hide' : 'Show'; el.setAttribute('aria-label', show ? 'Hide password' : 'Show password'); },
   'toggle-nav'(el) { const n = $('#nav'); const open = n.classList.toggle('open'); el.setAttribute('aria-expanded', String(open)); },
   'scroll'(el, e) { e.preventDefault(); const t = document.getElementById(el.dataset.target); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); $('#nav').classList.remove('open'); },
   'demo-fill'(el) { $('#loginId').value = el.dataset.id; $('#loginPw').value = el.dataset.pw; $('#loginPw').type = 'text'; const tg = $('[data-act=toggle-pw]'); if (tg) tg.textContent = 'Hide'; }
@@ -1012,7 +1068,7 @@ function expModal(e) {
 const FORMS = {
   levies(form) {
     const fd = new FormData(form), vals = {}, err = m => formError(m, 'formErr'); err('');
-    for (const l of LEVIES.filter(x => x.fixed)) { const n = Number(fd.get(l.id)); if (!(n >= 0) || fd.get(l.id) === '') return err(`Enter an amount for ${l.name}.`); vals[l.id] = n; }
+    for (const l of levies().filter(x => x.fixed)) { const n = Number(fd.get(l.id)); if (!(n >= 0) || fd.get(l.id) === '') return err(`Enter an amount for ${l.name}.`); vals[l.id] = n; }
     try { API.saveLevies(vals); toast('Levy amounts saved.', 'ok'); renderView(); } catch (e) { err(e.message); }
   }
 };
@@ -1040,10 +1096,9 @@ function reportModal(scope) {
     <div class="field"><label for="sMonth">Month</label><select id="sMonth" name="month" class="select">${MONTHS.map((m, i) => opt(i, m, now.getMonth())).join('')}</select></div>`,
     onSubmit: fd => { const kind = fd.get('kind'); downloadReport(kind, fd.get('year'), kind === 'year' ? 0 : (fd.get('month') || 0), village ? '' : S.u.id); closeModal(); } });
 }
-function changePwModal() {
-  openModal({ title: 'Change password', body: `<div class="field"><label for="pCur">Current password</label><input id="pCur" name="cur" class="input" type="password" autocomplete="current-password" required></div>
-    <div class="field"><label for="pNew">New password</label><input id="pNew" name="nw" class="input" type="password" minlength="6" autocomplete="new-password" required><span class="hint">At least 6 characters.</span></div>
-    <div class="field"><label for="pNew2">Repeat new password</label><input id="pNew2" name="nw2" class="input" type="password" autocomplete="new-password" required></div>`, submit: 'Save password',
+const pwField = (id, name, label, auto, hint) => `<div class="field"><label for="${id}">${label}</label><div class="pw"><input id="${id}" name="${name}" class="input" type="password" autocomplete="${auto}" required><button class="pw-toggle" type="button" data-act="toggle-pw" aria-label="Show password">Show</button></div>${hint ? `<span class="hint">${hint}</span>` : ''}</div>`;
+function changePwModal(force) {
+  openModal({ title: force === true ? 'Choose your own password' : 'Change password', sub: force === true ? 'You signed in with login details from your admin. Set a password only you know.' : '', body: pwField('pCur', 'cur', force === true ? 'Password you were sent' : 'Current password', 'current-password') + pwField('pNew', 'nw', 'New password', 'new-password', 'At least 6 characters.') + pwField('pNew2', 'nw2', 'Repeat new password', 'new-password'), submit: 'Save password',
     onSubmit: async fd => {
       const cur = fd.get('cur') || '', nw = fd.get('nw') || '';
       if (nw.length < 6) throw new Error('The new password needs at least 6 characters.');
@@ -1055,10 +1110,10 @@ function changePwModal() {
 
 /* ---------- Village access (landing page) ---------- */
 let attempts = 0, lockUntil = 0;
-function villageSelectHTML(sel) { return `<option value="" disabled${sel ? '' : ' selected'}>${'Select your village'}</option>` + VILLAGES.map(v => opt(v.id, `${v.name} (${v.code})`, sel)).join(''); }
+function villageSelectHTML(sel) { return `<option value="" disabled${sel ? '' : ' selected'}>Select your village or association</option>` + liveVillages().map(v => opt(v.id, `${v.name} (${v.code})`, sel)).join(''); }
 function fillVillageSelects() {
   $$('[data-village-select]').forEach(s => { s.innerHTML = villageSelectHTML(''); });
-  const nav = $('#navVillage'); if (nav) nav.options[0].textContent = 'Your village';
+  const nav = $('#navVillage'); if (nav) nav.options[0].textContent = 'Village or association'; const g = $('#villageGrid'); if (g) g.innerHTML = liveVillages().map(v => `<button type="button" class="vcard" style="--vc:${v.color}" data-act="pick-village" data-village="${v.id}"><b>${esc(v.name)}</b><span>${esc(v.code)}, ${esc(v.tag)}</span><em>Open this village</em></button>`).join('');
 }
 function pickVillage(id) {
   const v = VILLAGES.find(x => x.id === id); if (!v) return;
@@ -1067,6 +1122,7 @@ function pickVillage(id) {
   const box = $('#access'); box.scrollIntoView({ behavior: 'smooth', block: 'center' }); box.classList.remove('pulse'); void box.offsetWidth; box.classList.add('pulse');
   setTimeout(() => { const i = $('#loginId'); if (i) i.focus({ preventScroll: true }); }, 350);
   $('#nav').classList.remove('open');
+  if (rememberedFor(id)) tryRemembered(id);
 }
 function focusAccess() { const sel = $('#heroVillage'); $('#access').scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(() => sel.focus({ preventScroll: true }), 350); }
 function updateDemo() {
@@ -1075,23 +1131,56 @@ function updateDemo() {
   const c = v.code.toLowerCase(); box.hidden = false;
   box.innerHTML = `<b>Demo access for ${esc(v.name)}</b><br>Admin: <code>${v.code}-A02</code> password <code>${c}-admin</code><br>Member: <code>${v.code}-M001</code> password <code>${c}-member</code><div class="demo-btns"><button type="button" class="btn btn-ghost btn-sm" data-act="demo-fill" data-id="${v.code}-A02" data-pw="${c}-admin">Fill admin</button><button type="button" class="btn btn-ghost btn-sm" data-act="demo-fill" data-id="${v.code}-M001" data-pw="${c}-member">Fill member</button></div>`;
 }
+const CONTACT_MSG = 'Enter correct details or contact admin.';
+const failKey = (vid, uid) => `vv_fail_${vid}_${uid}`;
+function failState(vid, uid) { try { return JSON.parse(ssGet(failKey(vid, uid)) || 'null') || { n: 0, until: 0 }; } catch (_) { return { n: 0, until: 0 }; } }
+
+/* Remember me: a random token is saved on this device and on the member's record (never the password).
+   Choosing the village again signs that member straight in. */
+const remKey = vid => 'vv_rem_' + vid;
+function rememberedFor(vid) { try { const r = JSON.parse(lsGet(remKey(vid)) || 'null'); return r && r.u && r.t ? r : null; } catch (_) { return null; } }
+function newToken() { try { return Array.from(crypto.getRandomValues(new Uint8Array(16))).map(b => b.toString(16).padStart(2, '0')).join(''); } catch (_) { return String(Math.random()).slice(2) + String(Date.now()); } }
+function makeRemember(v, u) { const t = newToken(); u.rememberTokens = (u.rememberTokens || []).slice(-4).concat(t); DB.save(v); lsSet(remKey(v.id), JSON.stringify({ u: u.id, t })); }
+function forgetRemember(vid, v) {
+  const r = rememberedFor(vid); try { localStorage.removeItem(remKey(vid)); } catch (_) {} delete mem[remKey(vid)];
+  if (r && v) { const u = v.users.find(x => x.id === r.u); if (u) { u.rememberTokens = (u.rememberTokens || []).filter(x => x !== r.t); DB.save(v); } }
+}
+async function tryRemembered(vid) {
+  const r = rememberedFor(vid), vil = VILLAGES.find(x => x.id === vid); if (!r || !vil || vil.removed) return false;
+  try {
+    const v = await DB.load(vid), u = v.users.find(x => x.id === r.u);
+    if (!u || !u.active || v.status === 'suspended' || !(u.rememberTokens || []).includes(r.t)) { forgetRemember(vid, v); return false; }
+    ssSet('vv_sess', JSON.stringify({ v: vid, u: u.id })); enterApp(v, u, true); return true;
+  } catch (_) { return false; }
+}
+
 async function doLogin(e) {
   e.preventDefault(); const fd = new FormData(e.target), err = m => formError(m, 'loginError'); err('');
-  const vid = $('#heroVillage').value, uid = (fd.get('id') || '').trim().toUpperCase(), pw = fd.get('pw') || '';
-  if (!vid) return err('Choose your village first.'); if (!uid) return err('Enter your member or admin ID.'); if (!pw) return err('Enter your password.');
-  if (Date.now() < lockUntil) return err(`Too many tries. Wait ${Math.ceil((lockUntil - Date.now()) / 1000)} seconds and try again.`);
+  const vid = $('#heroVillage').value, uid = (fd.get('id') || '').trim().toUpperCase(), pw = fd.get('pw') || '', remember = !!fd.get('remember');
+  if (!vid) return err('Choose your village or association first.'); if (!uid) return err('Enter your member or admin ID.'); if (!pw) return err('Enter your password.');
+  const fs = failState(vid, uid);
+  if (Date.now() < fs.until) return err(CONTACT_MSG);
   const btn = $('#loginBtn'); btn.disabled = true; btn.textContent = 'Opening...';
   try {
+    const vil = VILLAGES.find(x => x.id === vid); if (!vil || vil.removed) throw new Error('This village or association is no longer on VillageVault. Contact your admin.');
     const v = await DB.load(vid), u = v.users.find(x => x.id === uid), h = u ? await hashPw(vid, u.id, pw) : null;
-    if (!u || u.hash !== h) { attempts++; if (attempts >= 5) { lockUntil = Date.now() + 30000; attempts = 0; } throw new Error('That ID and password do not match this village. Check them and try again.'); }
-    if (v.status === 'suspended') throw new Error('Access to this village is paused. Contact VillageVault support.');
-    if (!u.active) throw new Error('This account is deactivated. Contact your village admin.');
-    attempts = 0; ssSet('vv_sess', JSON.stringify({ v: vid, u: u.id })); e.target.reset(); enterApp(v, u);
+    if (!u || u.hash !== h) {
+      fs.n = (fs.n || 0) + 1;
+      if (fs.n >= CONFIG.MAX_ATTEMPTS) { fs.n = 0; fs.until = Date.now() + CONFIG.LOCK_SECONDS * 1000; ssSet(failKey(vid, uid), JSON.stringify(fs)); throw new Error(CONTACT_MSG); }
+      ssSet(failKey(vid, uid), JSON.stringify(fs)); const left = CONFIG.MAX_ATTEMPTS - fs.n;
+      throw new Error(`That ID and password do not match this village. ${left} ${left === 1 ? 'try' : 'tries'} left.`);
+    }
+    if (v.status === 'suspended') throw new Error('Access is paused for this village or association. Contact VillageVault support.');
+    if (!u.active) throw new Error('This account is deactivated. Contact your admin.');
+    ssDel(failKey(vid, uid));
+    if (remember) makeRemember(v, u); else forgetRemember(vid, v);
+    ssSet('vv_sess', JSON.stringify({ v: vid, u: u.id })); e.target.reset(); enterApp(v, u);
   } catch (ex) { err(ex.message || 'Could not open the dashboard.'); } finally { btn.disabled = false; btn.textContent = 'Open my dashboard'; }
 }
-function enterApp(v, u) {
+function enterApp(v, u, auto) {
   S.v = v; S.u = u; S.owner = false; S.page = 'overview'; S.f = {}; S.tab = 'collections';
-  $('#site').hidden = true; $('#app').hidden = false; renderApp(); window.scrollTo(0, 0); toast(`Welcome, ${u.name}.`, 'ok');
+  $('#site').hidden = true; $('#app').hidden = false; renderApp(); window.scrollTo(0, 0); toast(auto ? `Welcome back, ${u.name}.` : `Welcome, ${u.name}.`, 'ok');
+  if (u.mustChange) setTimeout(() => changePwModal(true), 300);
 }
 function logout() {
   ssDel('vv_sess'); S.v = null; S.u = null; S.owner = false; closeModal(); document.body.classList.remove('side-open');
@@ -1152,7 +1241,6 @@ window.addEventListener('hashchange', handleRoute);
 async function init() {
   $('#year').textContent = `\u00A9 ${new Date().getFullYear()} VillageVault. Each village's records stay private to that village.`;
   fillVillageSelects();
-  $('#villageGrid').innerHTML = VILLAGES.map(v => `<button type="button" class="vcard" style="--vc:${v.color}" data-act="pick-village" data-village="${v.id}"><b>${esc(v.name)}</b><span>${esc(v.code)}, ${esc(v.tag)}</span><em>Open this village</em></button>`).join('');
   try {
     const raw = ssGet('vv_sess');
     if (raw) {
@@ -1181,10 +1269,7 @@ async function init() {
    "VillageVault support" so records stay accountable without
    exposing who the owner is.
    ========================================================= */
-function vlog(v, action, target, detail) {
-  v.seq.aud = (v.seq.aud || 0) + 1;
-  v.audit.push({ id: 'L' + v.seq.aud, ts: stamp(), adminId: 'SUPPORT', adminName: 'VillageVault support', adminTitle: 'Platform support', action, target, detail });
-}
+function vlog() { /* Owner activity is never written into a village's log. It is kept only in the owner's own log (olog). */ }
 function olog(action, village, detail) {
   OWN.data.log.push({ id: 'O' + (OWN.data.log.length + 1), ts: stamp(), action, village: village || 'All villages', detail });
 }
@@ -1200,10 +1285,13 @@ const OWNER_API = {
   },
   manageVillage(id, d) {
     requireOwner(); const v = DB.cache[id], vil = VILLAGES.find(x => x.id === id), ch = [];
-    if (v.name !== d.name) { ch.push(`Name: ${v.name} to ${d.name}`); v.name = d.name; vil.name = d.name; OWN.data.names[id] = d.name; }
-    const was = v.status || 'active'; if (was !== d.status) { ch.push(d.status === 'suspended' ? 'Village access paused' : 'Village access restored'); v.status = d.status; }
+    if (d.name !== undefined && v.name !== d.name) { ch.push(`Name: ${v.name} to ${d.name}`); v.name = d.name; vil.name = d.name; OWN.data.names[id] = d.name; }
+    const was = v.status || 'active'; if (d.status !== undefined && was !== d.status) { ch.push(d.status === 'suspended' ? 'Access paused' : d.status === 'readonly' ? 'Access restricted to read-only' : 'Access restored'); v.status = d.status; }
+    if (d.plan && d.plan !== v.plan) { ch.push(`Plan: ${v.plan} to ${d.plan}`); v.plan = d.plan; }
+    if (d.removed != null && !!d.removed !== !!vil.removed) { ch.push(d.removed ? 'Removed from the platform' : 'Restored to the platform'); vil.removed = !!d.removed; OWN.data.removed[id] = !!d.removed; if (!d.removed) delete OWN.data.removed[id]; }
     if (!ch.length) throw new Error('Nothing was changed.');
-    vlog(v, 'Village settings changed', v.id, ch.join('; ')); olog('Village settings changed', v.name, ch.join('; ') + (d.note ? `. Note: ${d.note}` : '')); saveAll(v);
+    if (d.name !== undefined) setPubName(id, v.name);
+    olog('Village settings changed', v.name, ch.join('; ') + (d.note ? `. Note: ${d.note}` : '')); saveAll(v);
   },
   async addAdmin(v, d) {
     requireOwner();
@@ -1252,7 +1340,7 @@ async function enterOwner(silent) {
 function ownerBack() { S.v = null; S.u = null; S.page = 'o-overview'; S.f = {}; document.body.classList.remove('side-open'); renderApp(); window.scrollTo(0, 0); }
 async function openVillageAsOwner(id) {
   requireOwner(); const v = await DB.load(id);
-  S.v = v; S.u = { id: 'SUPPORT', name: 'VillageVault support', role: 'admin', title: 'Platform support', active: true, ward: '', phone: '', joined: today() };
+  S.v = v; S.u = { id: 'SUPPORT', name: 'Village office', role: 'admin', title: 'Admin', active: true, ward: '', phone: '', joined: today() };
   S.page = 'overview'; S.f = {}; olog('Opened village dashboard', v.name, 'Owner opened the admin dashboard'); OWN.save(); renderApp(); window.scrollTo(0, 0);
 }
 
@@ -1261,13 +1349,14 @@ function vStats(v) {
   const yr = new Date().getFullYear(), ver = v.tx.filter(t => t.status === 'verified'), ex = v.expenses.filter(e => e.status !== 'void'), pend = v.tx.filter(t => t.status === 'pending');
   return { members: v.users.filter(u => u.role === 'member' && u.active).length, admins: v.users.filter(u => u.role === 'admin' && u.active).length, collected: sum(ver.filter(t => yearOf(t.date) === yr)), spent: sum(ex.filter(e => yearOf(e.date) === yr)), balance: sum(ver) - sum(ex), pending: pend.length, pendingAmt: sum(pend) };
 }
-const statusBadge = v => (v.status === 'suspended') ? '<span class="badge b-rejected">Paused</span>' : '<span class="badge b-active">Active</span>';
+const statusBadge = v => { const vil = VILLAGES.find(x => x.id === v.id); return (vil && vil.removed) ? '<span class="badge b-void">Removed</span>' : (v.status === 'suspended') ? '<span class="badge b-rejected">Paused</span>' : (v.status === 'readonly') ? '<span class="badge b-pending">Read-only</span>' : '<span class="badge b-active">Active</span>'; };
+const planBadge = v => v.plan === 'premium' ? '<span class="badge b-admin">Premium</span>' : '<span class="badge b-off">Basic</span>';
 const vDot = vil => `<span class="dot" style="background:${vil.color}"></span>`;
 
 const OWNERV = {
   'o-overview'() {
     const rows = VILLAGES.map(vil => ({ vil, v: DB.cache[vil.id] })).filter(r => r.v).map(r => Object.assign(r, { st: vStats(r.v) })), yr = new Date().getFullYear();
-    const tot = k => rows.reduce((a, r) => a + r.st[k], 0), live = rows.filter(r => r.v.status !== 'suspended').length;
+    const tot = k => rows.reduce((a, r) => a + r.st[k], 0), live = rows.filter(r => r.v.status !== 'suspended' && !r.vil.removed).length;
     return `${OWN.data.defaultPw ? `<div class="owner-banner"><div><b>Change the default owner password.</b> Anyone who knows it can open every village.</div><button class="btn btn-saffron btn-sm" type="button" data-act="change-pw">Change password</button></div>` : ''}
     <div class="kpis">${kpi('Collected in ' + yr, money(tot('collected')), 'All villages together', 'hot')}${kpi('Waiting for verification', String(tot('pending')), money(tot('pendingAmt')))}${kpi('Active members', String(tot('members')), `${tot('admins')} active admins`)}${kpi('Villages open', `${live} of ${rows.length}`, live < rows.length ? 'Some villages are paused' : 'All villages running')}</div>
     <section class="panel"><div class="panel-h"><div><h2>Collections by village in ${yr}</h2><p>Verified payments only</p></div></div>${barChart(rows.map(r => ({ label: r.vil.code, title: r.v.name, value: r.st.collected })))}</section>
@@ -1276,8 +1365,8 @@ const OWNERV = {
   },
   'o-villages'() {
     const rows = VILLAGES.map(vil => ({ vil, v: DB.cache[vil.id] })).filter(r => r.v);
-    return `<section class="panel"><div class="panel-h"><div><h2>Village settings</h2><p>Rename a village or pause its access. A paused village cannot sign in until you restore it.</p></div></div>
-    ${table(['Village', 'Code', { t: 'Admins', num: true }, { t: 'Members', num: true }, 'Access', ''], rows.map(r => { const st = vStats(r.v); return [`${vDot(r.vil)}${esc(r.v.name)}`, esc(r.vil.code), String(st.admins), String(st.members), statusBadge(r.v), `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="owner-manage" data-id="${r.vil.id}">Rename or pause</button><button class="btn btn-ghost btn-sm" type="button" data-act="owner-admins" data-id="${r.vil.id}">Admins</button><button class="btn btn-primary btn-sm" type="button" data-act="owner-open" data-id="${r.vil.id}">Open</button></div>`]; }), ['No villages', ''])}</section>`;
+    return `<section class="panel"><div class="panel-h"><div><h2>Villages and associations</h2><p>Edit the name or plan, restrict access, or remove one from the platform. Nothing is erased: a removed village can be restored.</p></div></div>
+    ${table(['Village or association', 'Code', 'Plan', { t: 'Admins', num: true }, { t: 'Members', num: true }, 'Access', ''], rows.map(r => { const st = vStats(r.v); return [`${vDot(r.vil)}${esc(r.v.name)}`, esc(r.vil.code), planBadge(r.v), String(st.admins), String(st.members), statusBadge(r.v), `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="owner-manage" data-id="${r.vil.id}">Edit or restrict</button>${r.vil.removed ? `<button class="btn btn-leaf btn-sm" type="button" data-act="owner-restore" data-id="${r.vil.id}">Restore</button>` : `<button class="btn btn-danger btn-sm" type="button" data-act="owner-remove" data-id="${r.vil.id}">Remove</button>`}<button class="btn btn-ghost btn-sm" type="button" data-act="owner-admins" data-id="${r.vil.id}">Admins</button><button class="btn btn-primary btn-sm" type="button" data-act="owner-open" data-id="${r.vil.id}">Open</button></div>`]; }), ['No villages', ''])}</section>`;
   },
   'o-admins'() {
     const f = S.f, vid = f.village || VILLAGES[0].id, v = DB.cache[vid], admins = v.users.filter(u => u.role === 'admin');
@@ -1305,12 +1394,19 @@ Object.assign(ACTIONS, {
   'owner-admins'(el) { S.page = 'o-admins'; S.f = { village: el.dataset.id }; renderView(); window.scrollTo(0, 0); },
   'owner-manage'(el) {
     const v = DB.cache[el.dataset.id];
-    openModal({ title: `Manage ${v.name}`, sub: 'Renaming changes the name everywhere. Pausing blocks every member and admin of this village from signing in.',
-      body: `<div class="field"><label for="omN">Village name</label><input id="omN" name="name" class="input" maxlength="40" value="${esc(v.name)}" required></div>
-      <div class="field"><label for="omS">Access</label><select id="omS" name="status" class="select">${opt('active', 'Active', v.status || 'active')}${opt('suspended', 'Paused', v.status || 'active')}</select></div>
+    openModal({ title: `Edit ${v.name}`, sub: 'Renaming changes the name everywhere. Paused blocks everyone from signing in. Read-only lets people look but not change anything.',
+      body: `<div class="field"><label for="omN">Village or association name</label><input id="omN" name="name" class="input" maxlength="40" value="${esc(v.name)}" required></div>
+      <div class="form-row"><div class="field"><label for="omS">Access</label><select id="omS" name="status" class="select">${opt('active', 'Active', v.status || 'active')}${opt('readonly', 'Restricted: read-only', v.status || 'active')}${opt('suspended', 'Paused: no sign-in', v.status || 'active')}</select></div>
+      <div class="field"><label for="omPl">Plan</label><select id="omPl" name="plan" class="select">${opt('basic', 'Basic', v.plan)}${opt('premium', 'Premium (receipts carry the village name and logo)', v.plan)}</select></div></div>
       <div class="field"><label for="omNote">Note for your log (optional)</label><input id="omNote" name="note" class="input" maxlength="120"></div>`, submit: 'Save changes',
-      onSubmit: fd => { const n = (fd.get('name') || '').trim(); if (n.length < 2) throw new Error('Enter a village name.'); OWNER_API.manageVillage(v.id, { name: n, status: fd.get('status'), note: (fd.get('note') || '').trim() }); fillVillageSelects(); done('Village updated.'); } });
+      onSubmit: fd => { const n = (fd.get('name') || '').trim(); if (n.length < 2) throw new Error('Enter a village name.'); OWNER_API.manageVillage(v.id, { name: n, status: fd.get('status'), plan: fd.get('plan'), note: (fd.get('note') || '').trim() }); fillVillageSelects(); done('Village updated.'); } });
   },
+  'owner-remove'(el) {
+    const v = DB.cache[el.dataset.id];
+    openModal({ title: `Remove ${v.name}?`, danger: true, sub: 'It disappears from the sign-in list and nobody in it can sign in. Its records are kept safe and you can restore it at any time.', body: `<div class="field"><label for="orT">Type the name to confirm</label><input id="orT" name="confirm" class="input" autocomplete="off" required></div>`, submit: 'Remove from platform',
+      onSubmit: fd => { if ((fd.get('confirm') || '').trim().toLowerCase() !== v.name.toLowerCase()) throw new Error('Type the exact name to confirm.'); OWNER_API.manageVillage(v.id, { removed: true }); fillVillageSelects(); done(`${v.name} removed.`); } });
+  },
+  'owner-restore'(el) { const v = DB.cache[el.dataset.id]; OWNER_API.manageVillage(v.id, { removed: false }); fillVillageSelects(); toast(`${v.name} restored.`, 'ok'); renderView(); },
   'o-add-admin'(el) {
     const v = DB.cache[el.dataset.id], pw = 'Ad' + Math.floor(100000 + Math.random() * 899999);
     openModal({ title: `Add an admin to ${v.name}`, sub: 'Give the admin their ID and password. They can change the password after signing in.',
@@ -1573,14 +1669,15 @@ function nairaWords(n) {
 }
 function receiptData(t) {
   const m = userById(t.memberId) || { name: 'Former member', ward: '' };
-  return { no: t.receiptNo, village: S.v.name, member: m.name, memberId: t.memberId, ward: m.ward || '', levy: levyOf(t.levy).name, amount: t.amount, date: t.date, method: t.method, ref: t.ref || '-', verifiedBy: t.verifiedBy || '', verifiedAt: t.verifiedAt, issuedBy: t.receiptBy, issuedAt: t.receiptAt };
+  return { premium: S.v.plan === 'premium', logo: S.v.logo, no: t.receiptNo, village: S.v.name, member: m.name, memberId: t.memberId, ward: m.ward || '', levy: levyOf(t.levy).name, amount: t.amount, date: t.date, method: t.method, ref: t.ref || '-', verifiedBy: t.verifiedBy || '', verifiedAt: t.verifiedAt, issuedBy: t.receiptBy, issuedAt: t.receiptAt };
 }
 function receiptRows(r) {
   return [['Received from', `${r.member} (${r.memberId})`], ['Levy', r.levy], ['Payment date', fmtDate(r.date)], ['Payment method', r.method], ['Bank reference', r.ref], ['Verified by', `${r.verifiedBy}, ${fmtTS(r.verifiedAt)}`], ['Receipt issued by', `${r.issuedBy}, ${fmtTS(r.issuedAt)}`]];
 }
 
 /* ----- PNG (drawn on a canvas, no libraries) ----- */
-function receiptPng(r) {
+async function receiptPng(r) {
+  let logoImg = null; if (r.premium && r.logo) { try { logoImg = await loadImg(r.logo); } catch (_) {} }
   return new Promise((res, rej) => {
     try {
       const W = 900, H = 1260, c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d');
@@ -1593,7 +1690,8 @@ function receiptPng(r) {
       text('VillageVault', 140, 92, { w: 800, s: 34, c: '#FFFFFF' });
       text('OFFICIAL RECEIPT', 70, 190, { w: 800, s: 58, c: '#FFFFFF' });
       text(r.no, W - 70, 92, { w: 700, s: 28, c: '#F5B83D', a: 'right' });
-      text(`${r.village} Village Union`, 70, 335, { w: 800, s: 38, c: '#1A1A4E', max: W - 140 });
+      text(r.premium ? r.village : 'Payment receipt', 70, 335, { w: 800, s: 38, c: '#1A1A4E', max: logoImg ? W - 290 : W - 140 });
+      if (logoImg) { g.save(); g.beginPath(); g.roundRect ? g.roundRect(W - 170, 290, 100, 100, 18) : g.rect(W - 170, 290, 100, 100); g.clip(); g.drawImage(logoImg, W - 170, 290, 100, 100); g.restore(); g.strokeStyle = '#DCE3E0'; g.lineWidth = 2; g.beginPath(); g.roundRect ? g.roundRect(W - 170, 290, 100, 100, 18) : g.rect(W - 170, 290, 100, 100); g.stroke(); }
       text(`Issued ${fmtDate(r.issuedAt.slice(0, 10))}`, 70, 378, { w: 500, s: 24, c: '#5B5F7A' });
       // amount box
       g.fillStyle = '#EEF2F0'; g.beginPath(); g.roundRect ? g.roundRect(60, 410, W - 120, 190, 22) : g.rect(60, 410, W - 120, 190); g.fill();
@@ -1622,7 +1720,8 @@ function receiptPdf(r) {
   pdf.rect(0, 0, pdf.W, 92, '#1A1A4E'); pdf.rect(0, 92, pdf.W, 5, '#F5B83D');
   pdf.text('VillageVault', M, 32, { size: 10, bold: true, color: '#F5B83D' }); pdf.text(r.no, pdf.W - M, 32, { size: 9, bold: true, color: '#F5B83D', align: 'right' });
   pdf.text('OFFICIAL RECEIPT', M, 68, { size: 22, bold: true, color: '#FFFFFF' });
-  pdf.text(`${r.village} Village Union`, M, 126, { size: 14, bold: true, color: '#1A1A4E' });
+  pdf.text(pdf.fit(r.premium ? r.village : 'Payment receipt', CW - (r.premium && r.logo ? 60 : 0), 14, true), M, 126, { size: 14, bold: true, color: '#1A1A4E' });
+  if (r.premium && r.logo) pdf.img(r.logo, pdf.W - M - 46, 108, 46, 46);
   pdf.text(`Issued ${fmtDate(r.issuedAt.slice(0, 10))}`, M, 142, { size: 9, color: MUT });
   pdf.rect(M, 158, CW, 76, '#EEF2F0');
   pdf.text('Amount received', M + 14, 178, { size: 9, color: MUT });
@@ -1657,6 +1756,484 @@ Object.assign(ACTIONS, {
     if (el.dataset.fmt === 'pdf') { download(name, receiptPdf(r)); toast('Receipt PDF downloaded.', 'ok'); }
     else receiptPng(r).then(b => { download(name, b); toast('Receipt PNG downloaded.', 'ok'); }).catch(ex => toast(ex.message, 'err'));
   }
+});
+
+/* ---------- Start ---------- */
+
+
+/* =========================================================
+   ROUND 4: payment details, village profile, levy categories
+   ========================================================= */
+const waNum = p => { const d = String(p || '').replace(/\D/g, ''); if (!d) return ''; if (d.startsWith('234')) return d; if (d.startsWith('0')) return '234' + d.slice(1); return d.length === 10 ? '234' + d : d; };
+const waLinkTo = (phone, text) => { const n = waNum(phone); return n ? `https://wa.me/${n}?text=${encodeURIComponent(text)}` : ''; };
+const genPw = () => 'Vv' + Math.floor(100000 + Math.random() * 899999);
+const infoModal = (title, sub, body, size) => openModal({ title, sub, body, submit: false, size: size || 'modal-lg' });
+const linkBtn = (act, id, label, extra) => `<button type="button" class="linkbtn" data-act="${act}" data-id="${esc(id)}"${extra || ''}>${esc(label)}</button>`;
+
+Object.assign(API, {
+  saveAccounts(rows, note) {
+    requireAdmin();
+    S.v.settings.accounts = rows.map((r, i) => ({ id: 'B' + (i + 1), bank: r.bank, number: r.number, name: r.name }));
+    S.v.settings.payNote = note;
+    log('Updated payment details', 'Settings', rows.length ? rows.map(r => `${r.bank} ${r.number}`).join('; ') : 'All accounts removed'); commit();
+  },
+  saveBranding(d) {
+    requireAdmin(); const ch = [];
+    if (d.name && d.name !== S.v.name) { ch.push(`Name: ${S.v.name} to ${d.name}`); S.v.name = d.name; const vil = VILLAGES.find(x => x.id === S.v.id); if (vil) vil.name = d.name; setPubName(S.v.id, d.name); }
+    if (d.logo) { ch.push('Logo updated'); S.v.logo = d.logo; }
+    if (d.removeLogo && S.v.logo && !d.logo) { ch.push('Logo removed'); S.v.logo = null; }
+    if (!ch.length) throw new Error('Nothing was changed.');
+    log('Updated village profile', 'Profile', ch.join('; ')); commit();
+  },
+  addLevy(d) {
+    requireAdmin(); const nm = d.name.trim();
+    if (levyAll().some(l => !l.removed && l.name.toLowerCase() === nm.toLowerCase())) throw new Error('A levy with that name already exists.');
+    S.v.seq.lev = (S.v.seq.lev || 0) + 1; const id = 'c' + S.v.seq.lev + Date.now().toString(36).slice(-3);
+    S.v.levyList.push({ id, name: nm, fixed: !!d.fixed, color: PALETTE[levyAll().length % PALETTE.length] }); S.v.settings.levies[id] = d.fixed ? Number(d.amount) : 0;
+    log('Added levy category', id, `${nm} (${d.fixed ? money(d.amount) + ' required from every member' : 'voluntary, no set amount'})`); commit();
+  },
+  editLevy(id, d) {
+    requireAdmin(); const l = levyAll().find(x => x.id === id); if (!l) throw new Error('Levy not found.'); const ch = [];
+    if (d.name !== l.name) { if (levyAll().some(x => x.id !== id && !x.removed && x.name.toLowerCase() === d.name.toLowerCase())) throw new Error('A levy with that name already exists.'); ch.push(`Name: ${l.name} to ${d.name}`); l.name = d.name; }
+    if (!!d.fixed !== !!l.fixed) { ch.push(d.fixed ? 'Now required from every member' : 'Now voluntary'); l.fixed = !!d.fixed; }
+    const amt = l.fixed ? Number(d.amount) : 0; if ((S.v.settings.levies[id] || 0) !== amt) { ch.push(`Amount: ${money(S.v.settings.levies[id] || 0)} to ${money(amt)}`); S.v.settings.levies[id] = amt; }
+    if (!ch.length) throw new Error('Nothing was changed.');
+    log('Edited levy category', id, `${l.name}: ${ch.join('; ')}`); commit();
+  },
+  removeLevy(id) {
+    requireAdmin(); const l = levyAll().find(x => x.id === id); if (!l) throw new Error('Levy not found.');
+    if (levies().length <= 1) throw new Error('Keep at least one levy category.');
+    l.removed = true; log('Removed levy category', id, `${l.name} removed. Past payments stay in the records.`); commit();
+  },
+  restoreLevy(id) { requireAdmin(); const l = levyAll().find(x => x.id === id); if (!l) throw new Error('Levy not found.'); delete l.removed; log('Restored levy category', id, l.name); commit(); }
+});
+
+/* ---------- Payment details table (shown on every dashboard, edited by admins only) ---------- */
+function accTable(acc) {
+  if (!acc.length) return `<div class="empty"><b>No payment details yet</b>${isAdmin() ? 'Choose Edit payment details to add the village account.' : 'Your admin has not added the account yet.'}</div>`;
+  return `<div class="tablewrap"><table class="t bordered" aria-label="Village bank accounts"><thead><tr><th>Bank name</th><th>Account number</th><th>Account name</th></tr></thead><tbody>${acc.map(a => `<tr><td>${esc(a.bank)}</td><td class="mono">${esc(a.number)}</td><td>${esc(a.name)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+function paymentPanel() {
+  const acc = S.v.settings.accounts || [], edit = isAdmin() ? '<button class="btn btn-ghost btn-sm" type="button" data-act="edit-accounts">Edit payment details</button>' : '';
+  return `<section class="panel" id="payinfo"><div class="panel-h"><div><h2>How to pay</h2><p>Pay into the village account below, then upload your proof of payment. VillageVault never receives or holds your money.</p></div>${edit}</div>
+  ${accTable(acc)}${S.v.settings.payNote ? `<p class="hint" style="margin-top:10px">${esc(S.v.settings.payNote)}</p>` : ''}</section>`;
+}
+ACTIONS['edit-accounts'] = function () {
+  requireAdmin(); const acc = S.v.settings.accounts || [], n = Math.min(6, Math.max(3, acc.length + 1));
+  const row = i => { const a = acc[i] || {}; return `<tr><td><input class="input" name="bank_${i}" maxlength="40" value="${esc(a.bank || '')}" placeholder="Bank name" aria-label="Bank name ${i + 1}"></td><td><input class="input" name="num_${i}" inputmode="numeric" maxlength="10" value="${esc(a.number || '')}" placeholder="10 digits" aria-label="Account number ${i + 1}"></td><td><input class="input" name="nm_${i}" maxlength="60" value="${esc(a.name || '')}" placeholder="Account name" aria-label="Account name ${i + 1}"></td></tr>`; };
+  openModal({ title: 'Edit payment details', size: 'modal-lg', sub: 'Members see this table on every dashboard. Leave a row empty to remove it. Only admins can change it.',
+    body: `<div class="tablewrap"><table class="t bordered edit"><thead><tr><th>Bank name</th><th>Account number</th><th>Account name</th></tr></thead><tbody>${Array.from({ length: n }, (_, i) => row(i)).join('')}</tbody></table></div>
+    <div class="field"><label for="pnote">Instruction under the table</label><textarea id="pnote" name="note" class="textarea" maxlength="300">${esc(S.v.settings.payNote || '')}</textarea></div>`, submit: 'Save payment details',
+    onSubmit: fd => {
+      const rows = []; for (let i = 0; i < 6; i++) {
+        if (fd.get('bank_' + i) == null) continue; const b = (fd.get('bank_' + i) || '').trim(), nu = (fd.get('num_' + i) || '').trim(), nm = (fd.get('nm_' + i) || '').trim();
+        if (!b && !nu && !nm) continue; if (!b || !nu || !nm) throw new Error(`Row ${i + 1}: fill in the bank name, account number and account name.`);
+        if (!/^\d{10}$/.test(nu)) throw new Error(`Row ${i + 1}: the account number must be 10 digits.`); rows.push({ bank: b, number: nu, name: nm });
+      }
+      API.saveAccounts(rows, (fd.get('note') || '').trim()); done('Payment details saved.');
+    } });
+};
+
+/* ---------- Village profile: logo, name, plan ---------- */
+ADMIN.profile = function () {
+  const prem = S.v.plan === 'premium', vil = VILLAGES.find(x => x.id === S.v.id);
+  return `<section class="panel"><div class="panel-h"><div><h2>Village profile</h2><p>Your name and logo show on the sidebar${prem ? ' and on every receipt you issue' : ''}.</p></div><button class="btn btn-primary btn-sm" type="button" data-act="edit-profile">Edit name and logo</button></div>
+    <div class="profile-row">${S.v.logo ? `<img class="plogo" src="${esc(S.v.logo)}" alt="Village logo">` : `<div class="plogo ph" style="background:${vil.color}">${esc(vil.code)}</div>`}
+    <dl class="kv"><dt>Name</dt><dd>${esc(S.v.name)}</dd><dt>Code</dt><dd>${esc(S.v.code)}</dd><dt>Plan</dt><dd>${prem ? '<span class="badge b-admin">Premium</span>' : '<span class="badge b-off">Basic</span>'}</dd><dt>Receipts</dt><dd>${prem ? 'Bear the village name and logo' : 'Carry the VillageVault name only'}</dd></dl></div>
+    ${prem ? '' : '<div class="callout" style="margin-top:16px"><div><b>Want receipts with your village name and logo?</b><p>Ask VillageVault support to move your village to the Premium plan.</p></div></div>'}</section>
+  ${paymentPanel()}`;
+};
+ACTIONS['edit-profile'] = function () {
+  requireAdmin();
+  openModal({ title: 'Edit name and logo', sub: 'Changes show to every member straight away.',
+    body: `<div class="field"><label for="vpN">Village or association name</label><input id="vpN" name="name" class="input" maxlength="40" value="${esc(S.v.name)}" required></div>${fileField('Logo', 'logo')}${S.v.logo ? '<label class="check"><input type="checkbox" name="removeLogo"> <span>Remove the current logo</span></label>' : ''}`, submit: 'Save profile',
+    onSubmit: async fd => {
+      const n = (fd.get('name') || '').trim(); if (n.length < 2) throw new Error('Enter the village or association name.');
+      const logo = await readLogo(fd.get('proof')); API.saveBranding({ name: n, logo, removeLogo: !!fd.get('removeLogo') }); fillVillageSelects(); renderApp(); closeModal(); toast('Profile saved.', 'ok');
+    } });
+};
+
+/* ---------- Levy categories (add, edit, remove) ---------- */
+ADMIN.levies = function () {
+  const yr = new Date().getFullYear(), ver = villageTx().filter(t => yearOf(t.date) === yr), all = levyAll();
+  return `<section class="panel"><div class="panel-h"><div><h2>Levy categories</h2><p>Add your own levies, change amounts, or remove one. A required levy counts against every member until it is paid. Removing a levy keeps past payments.</p></div><button class="btn btn-primary btn-sm" type="button" data-act="add-levy">Add levy category</button></div>
+  ${table(['Levy', 'Type', { t: 'Amount per member', num: true }, { t: 'Paid in ' + yr, num: true }, 'Status', ''], all.map(l => [`<span class="dot" style="background:${l.color}"></span>${esc(l.name)}`, l.fixed ? 'Required from every member' : 'Voluntary', l.fixed ? money(S.v.settings.levies[l.id] || 0) : 'Any amount', money(sum(ver.filter(t => t.levy === l.id))), l.removed ? '<span class="badge b-void">Removed</span>' : '<span class="badge b-active">In use</span>',
+    l.removed ? `<div class="actions"><button class="btn btn-leaf btn-sm" type="button" data-act="restore-levy" data-id="${l.id}">Restore</button></div>` : `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="edit-levy" data-id="${l.id}">Edit</button><button class="btn btn-ghost btn-sm" type="button" data-act="remove-levy" data-id="${l.id}">Remove</button></div>`]), ['No levies', ''])}</section>`;
+};
+function levyForm(l) {
+  l = l || { fixed: true };
+  return `<div class="field"><label for="lvN">Levy name</label><input id="lvN" name="name" class="input" maxlength="40" value="${esc(l.name || '')}" placeholder="For example Development levy" required></div>
+  <div class="form-row"><div class="field"><label for="lvT">Type</label><select id="lvT" name="type" class="select">${opt('fixed', 'Required from every member', l.fixed ? 'fixed' : 'open')}${opt('open', 'Voluntary (any amount)', l.fixed ? 'fixed' : 'open')}</select></div>
+  <div class="field"><label for="lvA">Amount per member (naira)</label><input id="lvA" name="amount" class="input" type="number" min="0" step="100" value="${l.id ? S.v.settings.levies[l.id] || 0 : ''}" placeholder="0"></div></div>`;
+}
+function readLevyForm(fd) {
+  const name = (fd.get('name') || '').trim(), fixed = fd.get('type') === 'fixed', amount = Number(fd.get('amount') || 0);
+  if (name.length < 2) throw new Error('Enter a name for the levy.'); if (fixed && !(amount > 0)) throw new Error('Enter the amount every member must pay.');
+  return { name, fixed, amount };
+}
+Object.assign(ACTIONS, {
+  'add-levy'() { requireAdmin(); openModal({ title: 'Add a levy category', sub: 'It appears straight away in payment forms, reports and what members owe.', body: levyForm(null), submit: 'Add levy', onSubmit: fd => { API.addLevy(readLevyForm(fd)); done('Levy added.'); } }); },
+  'edit-levy'(el) { requireAdmin(); const l = levyOf(el.dataset.id); openModal({ title: 'Edit levy', sub: esc(l.name), body: levyForm(l), submit: 'Save changes', onSubmit: fd => { API.editLevy(l.id, readLevyForm(fd)); done('Levy updated.'); } }); },
+  'remove-levy'(el) {
+    requireAdmin(); const l = levyOf(el.dataset.id), n = S.v.tx.filter(t => t.levy === l.id).length;
+    openModal({ title: `Remove ${l.name}?`, danger: true, sub: `${n} payment record${n === 1 ? '' : 's'} stay${n === 1 ? 's' : ''} in the books and in reports. Members will no longer owe this levy.`, body: '', submit: 'Remove levy', onSubmit: () => { API.removeLevy(l.id); done('Levy removed.'); } });
+  },
+  'restore-levy'(el) { API.restoreLevy(el.dataset.id); toast('Levy restored.', 'ok'); renderView(); }
+});
+
+/* =========================================================
+   ROUND 4: outstanding bills, notices, member profile, clickable drill-downs
+   ========================================================= */
+function owingList(yr, f) {
+  f = f || {}; const q = (f.q || '').toLowerCase();
+  return S.v.users.filter(u => u.role === 'member' && u.active && (!f.ward || u.ward === f.ward) && (!q || u.name.toLowerCase().includes(q) || u.id.toLowerCase().includes(q)))
+    .map(u => { const rows = owingRows(u.id, yr); return { u, rows, owe: sum(rows, 'owe') }; })
+    .filter(x => x.owe > 0 && (!f.levy || x.rows.some(r => r.L.id === f.levy && r.owe > 0))).sort((a, b) => b.owe - a.owe);
+}
+function reminderText(it, yr) {
+  const lines = it.rows.filter(r => r.owe > 0).map(r => `- ${r.L.name}: ${money(r.owe)}`).join('\n'), acc = (S.v.settings.accounts || []).map(a => `${a.bank}, ${a.number}, ${a.name}`).join('\n');
+  return `Dear ${it.u.name.split(' ')[0]}, this is a payment reminder from ${S.v.name}.\nStill unpaid for ${yr}:\n${lines}\nTotal: ${money(it.owe)}\n\nPay to:\n${acc || '(ask your admin for the account)'}\n\nAfter paying, sign in to VillageVault, choose ${S.v.name} and upload your proof of payment.`;
+}
+const itemFor = (id, yr) => { const u = userById(id), rows = owingRows(id, yr); return { u, rows, owe: sum(rows, 'owe') }; };
+
+/* ----- Notice PDF (one page per member, with payment instructions) ----- */
+function wrapText(pdf, s, maxW, size, bold) {
+  const words = String(s).split(/\s+/), lines = []; let cur = '';
+  words.forEach(w => { const t = cur ? cur + ' ' + w : w; if (pdf.w(t, size, bold) > maxW && cur) { lines.push(cur); cur = w; } else cur = t; });
+  if (cur) lines.push(cur); return lines;
+}
+function drawNotice(pdf, it, yr) {
+  const M = 48, CW = pdf.W - 96, INK = '#14142B', MUT = '#5B5F7A', u = it.u, acc = S.v.settings.accounts || []; let y = 0;
+  const ensure = h => { if (y + h > pdf.H - 56) { pdf.add(); y = 60; } };
+  pdf.rect(0, 0, pdf.W, 104, '#1A1A4E'); pdf.rect(0, 104, pdf.W, 5, '#F5B83D');
+  if (S.v.logo) pdf.img(S.v.logo, pdf.W - M - 52, 26, 52, 52);
+  pdf.text(pdf.fit(S.v.name, CW - 70, 20, true), M, 48, { size: 20, bold: true, color: '#FFFFFF' });
+  pdf.text('OUTSTANDING PAYMENT NOTICE', M, 74, { size: 11, bold: true, color: '#F5B83D' });
+  pdf.text('Records kept on VillageVault', M, 92, { size: 8, color: '#C9CBEA' });
+  y = 140; pdf.text(`Notice NT-${S.v.code}-${yr}-${u.id}`, M, y, { size: 9, color: MUT }); pdf.text(`Date: ${fmtDate(today())}`, pdf.W - M, y, { size: 9, color: MUT, align: 'right' });
+  y += 28; pdf.text('To', M, y, { size: 9, color: MUT }); y += 17; pdf.text(pdf.fit(u.name, CW, 15, true), M, y, { size: 15, bold: true, color: '#1A1A4E' });
+  y += 16; pdf.text(`${u.id}   |   ${u.ward}${u.phone ? '   |   ' + u.phone : ''}`, M, y, { size: 10, color: MUT });
+  y += 28; wrapText(pdf, `Dear ${u.name.split(' ')[0]}, our records for ${yr} show that the amounts below are still unpaid. Only payments verified by an admin are counted. If you have already paid, upload your proof of payment and we will update your record.`, CW, 10.5).forEach(l => { pdf.text(l, M, y, { size: 10.5, color: INK }); y += 15; });
+  y += 8; const c2 = M + CW * .56, c3 = M + CW * .78, c4 = M + CW - 10;
+  pdf.rect(M, y, CW, 24, '#EEF2F0'); pdf.text('Levy', M + 10, y + 16, { size: 9, bold: true, color: MUT }); pdf.text('Amount due', c2, y + 16, { size: 9, bold: true, color: MUT, align: 'right' }); pdf.text('Paid', c3, y + 16, { size: 9, bold: true, color: MUT, align: 'right' }); pdf.text('Outstanding', c4, y + 16, { size: 9, bold: true, color: MUT, align: 'right' }); y += 24;
+  it.rows.filter(r => r.need > 0).forEach(r => {
+    ensure(26); pdf.text(pdf.fit(r.L.name, CW * .5, 10.5), M + 10, y + 17, { size: 10.5, color: INK }); pdf.text(pm(r.need), c2, y + 17, { size: 10.5, color: INK, align: 'right' }); pdf.text(pm(r.paid), c3, y + 17, { size: 10.5, color: INK, align: 'right' }); pdf.text(pm(r.owe), c4, y + 17, { size: 10.5, bold: true, color: r.owe ? '#D2395B' : '#12806A', align: 'right' }); y += 25; pdf.line(M, y, M + CW, y, '#DCE3E0');
+  });
+  ensure(34); pdf.rect(M, y, CW, 28, '#1A1A4E'); pdf.text('TOTAL OUTSTANDING', M + 10, y + 18, { size: 10, bold: true, color: '#FFFFFF' }); pdf.text(pm(it.owe), c4, y + 19, { size: 12, bold: true, color: '#F5B83D', align: 'right' }); y += 48;
+  ensure(40 + Math.max(1, acc.length) * 26); pdf.text('How to pay', M, y, { size: 12, bold: true, color: '#1A1A4E' }); y += 12;
+  const b2 = M + CW * .42, b3 = M + CW * .68, rowH = 26, top = y, rows = acc.length ? acc : [{ bank: 'Ask your admin for the account', number: '', name: '' }];
+  pdf.rect(M, y, CW, rowH, '#EEF2F0'); pdf.text('Bank name', M + 8, y + 17, { size: 9, bold: true, color: MUT }); pdf.text('Account number', b2 + 8, y + 17, { size: 9, bold: true, color: MUT }); pdf.text('Account name', b3 + 8, y + 17, { size: 9, bold: true, color: MUT }); y += rowH;
+  rows.forEach(a => { pdf.text(pdf.fit(a.bank, b2 - M - 14, 10.5, true), M + 8, y + 17, { size: 10.5, bold: true, color: INK }); pdf.text(a.number, b2 + 8, y + 17, { size: 11, bold: true, color: INK }); pdf.text(pdf.fit(a.name, M + CW - b3 - 14, 10.5), b3 + 8, y + 17, { size: 10.5, color: INK }); y += rowH; });
+  const bot = y; for (let k = 0; k <= rows.length + 1; k++) pdf.line(M, top + k * rowH, M + CW, top + k * rowH, '#5B5F7A', .8);
+  [M, b2, b3, M + CW].forEach(x => pdf.line(x, top, x, bot, '#5B5F7A', .8)); y += 24;
+  ensure(120); pdf.text('Steps', M, y, { size: 11, bold: true, color: '#1A1A4E' }); y += 8;
+  ['Pay the exact amount outstanding into the account above. VillageVault does not receive your money.', 'Keep your bank slip or transfer alert.', `Open VillageVault, choose ${S.v.name}, sign in and tap Upload proof. Your admin will verify it and your balance updates by itself.`].forEach((s, i) => {
+    wrapText(pdf, s, CW - 20, 10).forEach((l, j) => { y += 15; pdf.text(j === 0 ? `${i + 1}.` : '', M, y, { size: 10, bold: true, color: '#1A1A4E' }); pdf.text(l, M + 20, y, { size: 10, color: INK }); });
+  });
+  if (S.v.settings.payNote) { y += 8; wrapText(pdf, S.v.settings.payNote, CW, 9).forEach(l => { y += 13; pdf.text(l, M, y, { size: 9, color: MUT }); }); }
+  ensure(70); y += 30; pdf.line(M, y, M + 200, y, '#14142B', .8); pdf.text(`${S.u.name}, ${S.u.title}`, M, y + 14, { size: 10, bold: true, color: INK }); pdf.text(`${S.v.name}. Issued ${fmtTS(stamp())}`, M, y + 27, { size: 8.5, color: MUT });
+}
+function noticePdf(items, yr) {
+  const pdf = new PDF(); items.forEach((it, i) => { if (i) pdf.add(); drawNotice(pdf, it, yr); }); return pdf.build('Outstanding payment notice');
+}
+Object.assign(API, {
+  logNotice(ids, how) { requireAdmin(); log('Issued payment notice', ids.length === 1 ? ids[0] : `${ids.length} members`, `${how}: ${ids.length === 1 ? 'outstanding notice for ' + ids[0] : ids.length + ' outstanding notices'}`); commit(); }
+});
+
+/* ----- Outstanding bills page ----- */
+ADMIN.outstanding = function () {
+  const f = S.f, yr = new Date().getFullYear(), list = owingList(yr, f), all = owingList(yr, {}), active = S.v.users.filter(u => u.role === 'member' && u.active).length, exp = expectedPerMember() * active, page = paginate(list, f);
+  const owes = it => it.rows.filter(r => r.owe > 0).map(r => `${esc(r.L.name)} ${money(r.owe)}`).join('<br>');
+  return `<div class="kpis">${kpi('Members owing', String(all.length), `of ${active} active members`, all.length ? 'bad' : 'good')}${kpi('Total outstanding', money(sum(all, 'owe')), `for ${yr}`, 'hot')}${kpi('Required for ' + yr, money(exp), 'All required levies')}${kpi('Collected so far', exp ? Math.max(0, Math.round((1 - sum(all, 'owe') / exp) * 100)) + '%' : '-', 'of what is required', 'good')}</div>
+  <section class="panel"><div class="panel-h"><div><h2>Members who owe</h2><p>Open a member to see their history. Download a notice with the payment instructions and send it to them.</p></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost btn-sm" type="button" data-act="owing-csv">Download list (CSV)</button><button class="btn btn-primary btn-sm" type="button" data-act="notice-all"${list.length ? '' : ' disabled'}>Download all notices (PDF)</button></div></div>
+  <div class="toolbar"><div class="field grow2"><label for="fq">Search</label><input id="fq" class="input" type="search" data-filter="q" value="${esc(f.q || '')}" placeholder="Name or ID"></div><div class="field"><label for="fw">Ward</label><select id="fw" class="select" data-filter="ward">${wardOpts(f.ward, 'All wards')}</select></div><div class="field"><label for="fl">Owing levy</label><select id="fl" class="select" data-filter="levy">${opt('', 'Any levy', f.levy)}${levies().filter(l => l.fixed).map(l => opt(l.id, l.name, f.levy)).join('')}</select></div></div>
+  ${table(['Member', 'Ward', 'Phone', 'What they owe', { t: 'Total owed', num: true }, ''], page.map(it => { const wa = waLinkTo(it.u.phone, reminderText(it, yr)); return [`${linkBtn('member-profile', it.u.id, it.u.name)}<small>${esc(it.u.id)}</small>`, esc(it.u.ward), esc(it.u.phone || '-'), `<small style="color:var(--ink)">${owes(it)}</small>`, `<b>${money(it.owe)}</b>`, `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="member-profile" data-id="${esc(it.u.id)}">Open</button><button class="btn btn-primary btn-sm" type="button" data-act="notice-one" data-id="${esc(it.u.id)}">Notice PDF</button>${wa ? `<a class="btn btn-leaf btn-sm" href="${esc(wa)}" target="_blank" rel="noopener noreferrer" data-act="notice-wa" data-id="${esc(it.u.id)}">WhatsApp</a>` : ''}</div>`]; }), ['Nobody owes anything', 'Everyone is up to date for ' + yr + '.']).replace(/<td class="num"><div class="actions">/g, '<td><div class="actions">')}${pager(list.length, f.page, CONFIG.PER_PAGE)}</section>`;
+};
+Object.assign(ACTIONS, {
+  'notice-one'(el) { requireAdmin(); const yr = new Date().getFullYear(), it = itemFor(el.dataset.id, yr); if (!it.u) return; if (!(it.owe > 0)) return toast(`${it.u.name} owes nothing.`, 'ok'); download(`Notice-${it.u.id}.pdf`, noticePdf([it], yr)); API.logNotice([it.u.id], 'PDF downloaded'); toast('Notice downloaded. Send it to the member.', 'ok'); renderSoon(); },
+  'notice-all'() { requireAdmin(); const yr = new Date().getFullYear(), list = owingList(yr, S.f); if (!list.length) return toast('Nobody owes anything.', 'ok'); download(`Notices-${S.v.code}-${yr}.pdf`, noticePdf(list, yr)); API.logNotice(list.map(x => x.u.id), 'PDF downloaded'); toast(`${list.length} notices downloaded.`, 'ok'); renderSoon(); },
+  'notice-wa'(el) { try { API.logNotice([el.dataset.id], 'WhatsApp reminder opened'); } catch (_) {} },
+  'owing-csv'() { requireAdmin(); const yr = new Date().getFullYear(), rows = [['Member ID', 'Name', 'Ward', 'Phone', 'Owes', 'Total owed']]; owingList(yr, S.f).forEach(it => rows.push([it.u.id, it.u.name, it.u.ward, it.u.phone, it.rows.filter(r => r.owe > 0).map(r => `${r.L.name} ${r.owe}`).join('; '), it.owe])); csvDownload(`${S.v.code}-outstanding-${yr}.csv`, rows); }
+});
+
+/* ----- Member profile (admin): details, owing, payments, attendance ----- */
+function memberProfile(id) {
+  if (!isAdmin()) return; const u = userById(id); if (!u) return toast('Member not found.', 'err');
+  const yr = new Date().getFullYear(), it = itemFor(id, yr), paid = sum(memberPaid(id, yr)), att = attendanceOf(id), txs = S.v.tx.filter(t => t.memberId === id).sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  const wa = it.owe > 0 ? waLinkTo(u.phone, reminderText(it, yr)) : '', pend = u.mustChange && u.tempPw;
+  infoModal(u.name, `${esc(u.id)}, ${esc(u.ward)}`, `<div class="kpis kpis-3" style="margin-top:14px">${kpi('Paid in ' + yr, money(paid), '', 'good')}${kpi('Still owes', money(it.owe), it.owe ? 'Send a notice below' : 'Up to date', it.owe ? 'bad' : '')}${kpi('Meetings attended', att.total ? `${att.present} of ${att.total}` : 'None yet', att.total ? Math.round(att.present / att.total * 100) + '% present' : '')}</div>
+  <dl class="kv"><dt>Phone</dt><dd>${esc(u.phone || '-')}</dd><dt>Email</dt><dd>${esc(u.email || '-')}</dd><dt>Joined</dt><dd>${esc(fmtDate(u.joined))}</dd><dt>Account</dt><dd>${u.active ? '<span class="badge b-active">Active</span>' : '<span class="badge b-off">Deactivated</span>'}</dd><dt>Login</dt><dd>${pend ? 'Temporary password sent, not yet used' : 'Member uses their own password'}</dd></dl>
+  <div class="btn-row">${it.owe > 0 ? `<button class="btn btn-primary btn-sm" type="button" data-act="notice-one" data-id="${esc(id)}">Download notice (PDF)</button>` : ''}${wa ? `<a class="btn btn-leaf btn-sm" href="${esc(wa)}" target="_blank" rel="noopener noreferrer" data-act="notice-wa" data-id="${esc(id)}">Send reminder on WhatsApp</a>` : ''}<button class="btn btn-ghost btn-sm" type="button" data-act="cred-send" data-id="${esc(id)}">Send login details</button><button class="btn btn-ghost btn-sm" type="button" data-act="edit-member" data-id="${esc(id)}">Edit</button><button class="btn btn-ghost btn-sm" type="button" data-act="member-tx" data-id="${esc(id)}">All payments</button></div>
+  <div class="sec-title">What they owe in ${yr}</div>${table(['Levy', { t: 'Required', num: true }, { t: 'Paid', num: true }, { t: 'Owes', num: true }], it.rows.map(r => [esc(r.L.name), money(r.need), money(r.paid), r.owe ? `<b style="color:var(--hibiscus)">${money(r.owe)}</b>` : '<span class="badge b-verified">Paid</span>']), ['No required levies', ''])}
+  <div class="sec-title">Payment history</div>${table(['Date', 'Levy', { t: 'Amount', num: true }, 'Status', ''], txs.slice(0, 8).map(t => [esc(fmtDate(t.date)), esc(levyOf(t.levy).name), money(t.amount), badge(t.status), `<button class="btn btn-ghost btn-sm" type="button" data-act="view-tx" data-id="${t.id}">Open</button>`]), ['No payments yet', ''])}
+  <div class="sec-title">Attendance history</div>${table(['Date', 'Meeting', 'Status'], att.rows.slice(0, 8).map(r => [esc(fmtDate(r.m.date)), esc(r.m.title), attBadge(r.state)]), ['No meetings yet', ''])}`);
+}
+Object.assign(ACTIONS, {
+  'member-profile'(el) { memberProfile(el.dataset.id); },
+  'member-tx'(el) { closeModal(); S.page = 'transactions'; S.f = { member: el.dataset.id }; renderView(); window.scrollTo(0, 0); },
+  'tx-filter'(el) { closeModal(); S.page = 'transactions'; S.f = { levy: el.dataset.id, status: 'verified', year: String(new Date().getFullYear()) }; renderView(); window.scrollTo(0, 0); },
+  'exp-filter'(el) { closeModal(); S.page = 'expenses'; S.f = { cat: el.dataset.id, year: String(new Date().getFullYear()) }; renderView(); window.scrollTo(0, 0); },
+  'go-page'(el) { closeModal(); goto(el.dataset.page); },
+  'open-requests'() { S.rtab = 'requests'; goto('register'); },
+  'forget-device'() { forgetRemember(S.v.id, S.v); logout(); toast('This device has been forgotten.', 'ok'); }
+});
+
+/* ----- Clickable dashboard cards: each opens detail, and the detail is clickable too ----- */
+const dotName = l => `<span class="dot" style="background:${l.color}"></span>${esc(l.name)}`;
+Object.assign(ACTIONS, {
+  'kpi-collected'() {
+    const yr = new Date().getFullYear(), inY = villageTx().filter(t => yearOf(t.date) === yr), by = levyAll().map(l => ({ l, a: inY.filter(t => t.levy === l.id) })).filter(x => x.a.length), latest = inY.slice().sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);
+    infoModal(`Collected in ${yr}`, `${inY.length} verified payments, ${money(sum(inY))}`, `${table(['Levy', { t: 'Payments', num: true }, { t: 'Amount', num: true }, ''], by.map(x => [`${dotName(x.l)}`, String(x.a.length), money(sum(x.a)), `<button class="btn btn-ghost btn-sm" type="button" data-act="tx-filter" data-id="${x.l.id}">See payments</button>`]), ['Nothing collected yet', 'Verified payments appear here.']).replace(/<td class="num"><button/g, '<td><button')}
+    <div class="sec-title">Latest verified payments</div>${table(['Date', 'Member', 'Levy', { t: 'Amount', num: true }], latest.map(t => [esc(fmtDate(t.date)), linkBtn('member-profile', t.memberId, nameOf(t.memberId)), esc(levyOf(t.levy).name), money(t.amount)]), ['None yet', ''])}`);
+  },
+  'kpi-spent'() {
+    const yr = new Date().getFullYear(), exY = activeExp().filter(e => yearOf(e.date) === yr), cats = Array.from(new Set(exY.map(e => e.category))).map(c => ({ c, a: exY.filter(e => e.category === c) })), latest = exY.slice().sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
+    infoModal(`Spent in ${yr}`, `${exY.length} items, ${money(sum(exY))}`, `${table(['Category', { t: 'Items', num: true }, { t: 'Amount', num: true }, ''], cats.map(x => [esc(x.c), String(x.a.length), money(sum(x.a)), `<button class="btn btn-ghost btn-sm" type="button" data-act="exp-filter" data-id="${esc(x.c)}">See items</button>`]), ['Nothing spent yet', '']).replace(/<td class="num"><button/g, '<td><button')}
+    <div class="sec-title">Latest spending</div>${table(['Date', 'Description', { t: 'Amount', num: true }, 'Recorded by'], latest.map(e => [esc(fmtDate(e.date)), esc(e.description), money(e.amount), esc(e.createdBy)]), ['None yet', ''])}`);
+  },
+  'kpi-balance'() {
+    const inc = sum(villageTx()), spent = sum(activeExp());
+    infoModal('Village balance', 'All verified income less all recorded spending', `${table(['', { t: 'Amount', num: true }, ''], [['Verified income, all time', money(inc), '<button class="btn btn-ghost btn-sm" type="button" data-act="tx-filter" data-id="">See income</button>'], ['Spending, all time', money(spent), '<button class="btn btn-ghost btn-sm" type="button" data-act="exp-filter" data-id="">See spending</button>'], ['<b>Balance</b>', `<b>${money(inc - spent)}</b>`, '']]).replace(/<td class="num"><button/g, '<td><button')}
+    <div class="sec-title">Waiting for verification</div><p class="muted">${money(sum(pendingTx()))} from ${pendingTx().length} payment${pendingTx().length === 1 ? '' : 's'} is not in the balance yet.</p><div class="btn-row"><button class="btn btn-primary btn-sm" type="button" data-act="go-page" data-page="verify">Review payments</button><button class="btn btn-ghost btn-sm" type="button" data-act="go-page" data-page="reports">Open reports</button></div>`, 'modal-lg');
+  },
+  'my-owing'() {
+    const yr = new Date().getFullYear(), rows = owingRows(S.u.id, yr), owe = sum(rows, 'owe');
+    infoModal('What you owe', `${esc(S.v.name)}, ${yr}`, `${table(['Levy', { t: 'Required', num: true }, { t: 'Paid', num: true }, { t: 'You owe', num: true }], rows.map(r => [esc(r.L.name), money(r.need), money(r.paid), r.owe ? `<b style="color:var(--hibiscus)">${money(r.owe)}</b>` : 'Paid']).concat([['<b>Total</b>', '', '', `<b>${money(owe)}</b>`]]), ['No required levies', ''])}
+    <div class="sec-title">How to pay</div>${accTable(S.v.settings.accounts || [])}<p class="hint" style="margin-top:8px">${esc(S.v.settings.payNote || '')}</p><p class="hint">After you pay, upload your proof. Your balance drops by itself once the admin verifies it.</p><div class="btn-row"><button class="btn btn-primary btn-sm" type="button" data-act="upload-proof">Upload proof of payment</button></div>`);
+  },
+  'audit-item'(el) {
+    const a = S.v.audit.find(x => x.id === el.dataset.id); if (!a) return;
+    infoModal(a.action, 'Recorded by an admin', `<dl class="kv" style="margin-top:14px"><dt>When</dt><dd>${esc(fmtTS(a.ts))}</dd><dt>Admin</dt><dd>${esc(a.adminName)}${a.adminTitle ? ', ' + esc(a.adminTitle) : ''}</dd><dt>Record</dt><dd>${esc(a.target)}</dd><dt>Details</dt><dd>${esc(a.detail)}</dd></dl>
+    <div class="btn-row">${S.v.tx.some(t => t.id === a.target) ? `<button class="btn btn-primary btn-sm" type="button" data-act="view-tx" data-id="${esc(a.target)}">Open this record</button>` : ''}${userById(a.target) && userById(a.target).role === 'member' ? `<button class="btn btn-primary btn-sm" type="button" data-act="member-profile" data-id="${esc(a.target)}">Open this member</button>` : ''}<button class="btn btn-ghost btn-sm" type="button" data-act="go-page" data-page="audit">Full activity log</button></div>`, 'modal-md');
+  }
+});
+
+/* =========================================================
+   ROUND 4: attendance register, access requests, login details
+   ========================================================= */
+const meetingOpen = m => m.status === 'open' && m.date === today();
+const getMtg = id => { const m = S.v.meetings.find(x => x.id === id); if (!m) throw new Error('Meeting not found.'); return m; };
+const attBadge = s => ({ verified: '<span class="badge b-verified">Present</span>', pending: '<span class="badge b-pending">Waiting for admin</span>', rejected: '<span class="badge b-rejected">Not accepted</span>', absent: '<span class="badge b-off">Absent</span>', open: '<span class="badge b-pending">Register open</span>' })[s] || '';
+const meetingsDesc = () => S.v.meetings.slice().sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+function attendanceOf(id) {
+  const rows = meetingsDesc().map(m => { const k = m.marks.find(x => x.memberId === id); return { m, k, state: k ? k.status : (meetingOpen(m) ? 'open' : 'absent') }; });
+  const counted = rows.filter(r => !meetingOpen(r.m));
+  return { rows, total: counted.length, present: counted.filter(r => r.state === 'verified').length };
+}
+const presentCount = m => m.marks.filter(k => k.status === 'verified').length;
+
+Object.assign(API, {
+  openRegister(title) {
+    requireAdmin();
+    S.v.meetings.forEach(m => { if (m.status === 'open' && m.date !== today()) { m.status = 'closed'; m.closedAt = stamp(); m.closedBy = 'Closed automatically at midnight'; } });
+    if (S.v.meetings.some(meetingOpen)) throw new Error('A register is already open. Close it before opening another.');
+    const m = { id: nextId('mtg', 'G'), title, date: today(), status: 'open', openedBy: S.u.name, openedById: S.u.id, openedAt: stamp(), marks: [] };
+    S.v.meetings.push(m); log('Opened attendance register', m.id, `${title}, ${fmtDate(m.date)}`); commit(); return m;
+  },
+  closeRegister(id) {
+    requireAdmin(); const m = getMtg(id); if (m.status !== 'open') throw new Error('This register is already closed.');
+    m.status = 'closed'; m.closedAt = stamp(); m.closedBy = S.u.name; log('Closed attendance register', id, `${m.title}: ${presentCount(m)} present, ${m.marks.filter(k => k.status === 'pending').length} not yet verified`); commit();
+  },
+  markAttendance() {
+    if (!S.u || S.u.role !== 'member' || !S.u.active) throw new Error('Only members can mark attendance.'); requireWritable();
+    const m = S.v.meetings.find(meetingOpen); if (!m) throw new Error('No register is open right now. Your admin opens it on meeting days only.');
+    if (m.marks.some(k => k.memberId === S.u.id)) throw new Error('You have already marked attendance for this meeting.');
+    m.marks.push({ memberId: S.u.id, at: stamp(), status: 'pending' }); commit(); return m;
+  },
+  setMark(mid, memberId, status) {
+    requireAdmin(); const m = getMtg(mid); let k = m.marks.find(x => x.memberId === memberId);
+    if (!k) { k = { memberId, at: stamp(), status: 'pending', addedByAdmin: true }; m.marks.push(k); }
+    k.status = status; k.by = S.u.name; k.byId = S.u.id; k.byAt = stamp();
+    log(status === 'verified' ? 'Verified attendance' : 'Did not accept attendance', mid, `${nameOf(memberId)} at ${m.title}, ${fmtDate(m.date)}${k.addedByAdmin ? ' (added by admin)' : ''}`); commit();
+  },
+  verifyAll(mid) {
+    requireAdmin(); const m = getMtg(mid), p = m.marks.filter(k => k.status === 'pending'); if (!p.length) throw new Error('Nothing is waiting for verification.');
+    p.forEach(k => { k.status = 'verified'; k.by = S.u.name; k.byId = S.u.id; k.byAt = stamp(); }); log('Verified attendance', mid, `${p.length} members at ${m.title}, ${fmtDate(m.date)}`); commit(); return p.length;
+  },
+  removeMark(mid, memberId) {
+    requireAdmin(); const m = getMtg(mid); m.marks = m.marks.filter(k => k.memberId !== memberId); log('Removed attendance mark', mid, `${nameOf(memberId)} at ${m.title}, ${fmtDate(m.date)}`); commit();
+  },
+  logCredSent(id, how) { requireAdmin(); S.v.credLog.push({ memberId: id, by: S.u.name, at: stamp(), kind: 'sent', how }); log('Sent login details', id, `${nameOf(id)} (${how})`); commit(); },
+  resolveRequest(rid, d) {
+    requireAdmin(); const r = S.v.requests.find(x => x.id === rid); if (!r) throw new Error('Request not found.'); if (r.status !== 'new') throw new Error('This request was already handled.');
+    r.status = d.status; r.handledBy = S.u.name; r.handledAt = stamp(); r.memberId = d.memberId || ''; r.reason = d.reason || '';
+    log(d.status === 'issued' ? 'Issued login details' : 'Declined login request', rid, d.status === 'issued' ? `${r.name} confirmed on the register as ${nameOf(d.memberId)} (${d.memberId})` : `${r.name}: ${d.reason}`); commit();
+  }
+});
+
+/* ----- Member side ----- */
+function attendanceMember() {
+  const open = S.v.meetings.find(meetingOpen), att = attendanceOf(S.u.id), mine = open && open.marks.find(k => k.memberId === S.u.id), latest = meetingsDesc()[0];
+  const top = open ? (mine
+    ? `<div class="callout ok"><div><b>You marked attendance for ${esc(open.title)}</b><p>${mine.status === 'verified' ? 'Your admin has verified it.' : 'Waiting for your admin to verify it.'}</p></div></div>`
+    : `<div class="callout"><div><b>The register is open: ${esc(open.title)}</b><p>Mark yourself present now. Your admin will verify it. It closes tonight.</p></div><button class="btn btn-primary" type="button" data-act="att-mark">Mark me present</button></div>`)
+    : `<div class="empty" style="padding:18px"><b>No register is open right now</b>Your admin opens it on meeting days only.</div>`;
+  return `<section class="panel"><div class="panel-h"><div><h2>Attendance</h2><p>${att.total ? `You were present at ${att.present} of ${att.total} meetings (${Math.round(att.present / att.total * 100)}%).` : 'Your attendance history will show here.'}</p></div>${latest ? `<button class="btn btn-ghost btn-sm" type="button" data-act="view-register" data-id="${esc(latest.id)}">View the register</button>` : ''}</div>${top}
+  <div class="sec-title">My attendance history</div>${table(['Date', 'Meeting', 'Status'], att.rows.slice(0, 8).map(r => [esc(fmtDate(r.m.date)), esc(r.m.title), attBadge(r.state)]), ['No meetings yet', 'Registers opened by your admin appear here.'])}</section>`;
+}
+function attendanceRegisterView() {
+  const list = meetingsDesc().slice(0, 8), active = S.v.users.filter(u => u.role === 'member' && u.active).length;
+  return `<section class="panel"><div class="panel-h"><div><h2>Attendance register</h2><p>Meetings and who was verified present. Open a meeting to see the names.</p></div></div>
+  ${table(['Date', 'Meeting', { t: 'Present', num: true }, { t: 'Rate', num: true }, 'Status', ''], list.map(m => [esc(fmtDate(m.date)), esc(m.title), String(presentCount(m)), active ? Math.round(presentCount(m) / active * 100) + '%' : '-', meetingOpen(m) ? '<span class="badge b-verified">Open today</span>' : '<span class="badge b-off">Closed</span>', `<button class="btn btn-ghost btn-sm" type="button" data-act="view-register" data-id="${esc(m.id)}">View register</button>`]), ['No meetings yet', 'Registers opened by admins appear here.']).replace(/<td class="num">(<button)/g, '<td>$1')}</section>`;
+}
+function activityFeed() {
+  const list = S.v.audit.slice().sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, 15);
+  return `<section class="panel"><div class="panel-h"><div><h2>What the admins have done</h2><p>Every action an admin takes is shown here with their name and the time.</p></div></div>
+  <div class="list">${list.map(a => `<div class="list-item"><div><b>${esc(a.action)}</b><small>${esc(a.detail)}</small><small>${esc(a.adminName)}${a.adminTitle ? ', ' + esc(a.adminTitle) : ''} on ${esc(fmtTS(a.ts))}</small></div></div>`).join('') || '<div class="empty"><b>No activity yet</b></div>'}</div></section>`;
+}
+Object.assign(ACTIONS, {
+  'att-mark'() { API.markAttendance(); toast('Attendance marked. Your admin will verify it.', 'ok'); renderView(); },
+  'view-register'(el) {
+    const m = S.v.meetings.find(x => x.id === el.dataset.id); if (!m) return;
+    const here = m.marks.filter(k => k.status === 'verified').map(k => nameOf(k.memberId)).sort(), active = S.v.users.filter(u => u.role === 'member' && u.active).length;
+    infoModal(m.title, `${esc(fmtDate(m.date))}. ${here.length} verified present of ${active} members.${meetingOpen(m) ? ' The register is open today.' : ''}`, here.length ? `<div class="namegrid">${here.map(n => `<span>${esc(n)}</span>`).join('')}</div>` : '<div class="empty"><b>Nobody verified yet</b></div>', 'modal-md');
+  }
+});
+
+/* ----- Admin: Register page with four tabs ----- */
+ADMIN.register = function () {
+  const tab = S.rtab || 'attendance', reqN = S.v.requests.filter(r => r.status === 'new').length, pend = S.v.meetings.reduce((a, m) => a + m.marks.filter(k => k.status === 'pending').length, 0);
+  const tabs = [['attendance', 'Attendance' + (pend ? ` (${pend})` : '')], ['members', 'Member register'], ['logins', 'Login details'], ['requests', 'Login requests' + (reqN ? ` (${reqN})` : '')]];
+  const body = ({ attendance: regAttendance, members: regMembers, logins: regLogins, requests: regRequests })[tab]();
+  return `<div class="tabs-row"><div class="tabs" role="tablist">${tabs.map(t => `<button type="button" role="tab" data-act="rtab" data-tab="${t[0]}" class="${tab === t[0] ? 'active' : ''}" aria-selected="${tab === t[0]}">${t[1]}</button>`).join('')}</div></div>${body}`;
+};
+Object.assign(ACTIONS, { 'rtab'(el) { S.rtab = el.dataset.tab; S.f = {}; renderView(); } });
+VIEWS.admin.register = ADMIN.register; VIEWS.admin.profile = ADMIN.profile; VIEWS.admin.levies = ADMIN.levies; VIEWS.admin.outstanding = ADMIN.outstanding;
+
+function regAttendance() {
+  const open = S.v.meetings.find(meetingOpen), list = meetingsDesc();
+  const banner = open
+    ? `<section class="panel att-open"><div class="panel-h"><div><span class="badge b-verified">Register open today</span><h2 style="margin-top:8px">${esc(open.title)}</h2><p>${esc(fmtDate(open.date))}. Members can mark themselves present until you close it or midnight. ${presentCount(open)} verified, ${open.marks.filter(k => k.status === 'pending').length} waiting for you.</p></div><div class="btn-row"><button class="btn btn-primary" type="button" data-act="mtg-view" data-id="${esc(open.id)}">Open the register</button><button class="btn btn-ghost" type="button" data-act="mtg-close" data-id="${esc(open.id)}">Close register</button></div></div></section>`
+    : `<section class="panel"><div class="panel-h"><div><h2>No register is open</h2><p>Open it on meeting day only. It accepts attendance for today, so nobody can sign for a past meeting.</p></div><button class="btn btn-primary" type="button" data-act="mtg-open">Open today's register</button></div></section>`;
+  return `${banner}<section class="panel"><div class="panel-h"><div><h2>Meetings</h2><p>Open a meeting to verify names, or to click a member and see their payments and attendance.</p></div></div>
+  ${table(['Date', 'Meeting', { t: 'Present', num: true }, { t: 'Waiting', num: true }, 'Status', 'Opened by', ''], list.map(m => [esc(fmtDate(m.date)), esc(m.title), String(presentCount(m)), String(m.marks.filter(k => k.status === 'pending').length), meetingOpen(m) ? '<span class="badge b-verified">Open today</span>' : '<span class="badge b-off">Closed</span>', `${esc(m.openedBy)}<small>${esc(fmtTS(m.openedAt))}</small>`, `<button class="btn btn-ghost btn-sm" type="button" data-act="mtg-view" data-id="${esc(m.id)}">Open</button>`]), ['No meetings yet', 'Open a register on your next meeting day.']).replace(/<td class="num">(<button)/g, '<td>$1')}</section>`;
+}
+function regMembers() {
+  const f = S.f, yr = new Date().getFullYear(), q = (f.q || '').toLowerCase();
+  const list = S.v.users.filter(u => u.role === 'member' && (!f.ward || u.ward === f.ward) && (!q || u.name.toLowerCase().includes(q) || u.id.toLowerCase().includes(q))).sort((a, b) => a.name.localeCompare(b.name)), page = paginate(list, f);
+  return `<section class="panel"><div class="panel-h"><div><h2>Member register</h2><p>Click a name to see that member's attendance and payment history.</p></div><button class="btn btn-ghost btn-sm" type="button" data-act="register-csv">Download register (CSV)</button></div>
+  <div class="toolbar"><div class="field grow2"><label for="fq">Search</label><input id="fq" class="input" type="search" data-filter="q" value="${esc(f.q || '')}" placeholder="Name or ID"></div><div class="field"><label for="fw">Ward</label><select id="fw" class="select" data-filter="ward">${wardOpts(f.ward, 'All wards')}</select></div></div>
+  ${table(['Member', 'Ward', 'Phone', { t: 'Attendance', num: true }, { t: 'Paid ' + yr, num: true }, { t: 'Owes', num: true }, 'Account'], page.map(u => { const a = attendanceOf(u.id), o = memberOutstanding(u.id, yr); return [`${linkBtn('member-profile', u.id, u.name)}<small>${esc(u.id)}</small>`, esc(u.ward), esc(u.phone || '-'), a.total ? `${a.present} of ${a.total}` : '-', money(sum(memberPaid(u.id, yr))), o ? `<b style="color:var(--hibiscus)">${money(o)}</b>` : 'Nil', u.active ? '<span class="badge b-active">Active</span>' : '<span class="badge b-off">Deactivated</span>']; }), ['No members match', 'Try a different filter.'])}${pager(list.length, f.page, CONFIG.PER_PAGE)}</section>`;
+}
+function regLogins() {
+  const f = S.f, q = (f.q || '').toLowerCase();
+  const list = S.v.users.filter(u => u.role === 'member' && (!q || u.name.toLowerCase().includes(q) || u.id.toLowerCase().includes(q))).sort((a, b) => a.name.localeCompare(b.name)), page = paginate(list, f);
+  return `<section class="panel"><div class="panel-h"><div><h2>Member login details</h2><p>When a member forgets their login, find them here and send the details again. A member's own password is never stored. A temporary password is kept only until the member changes it.</p></div></div>
+  <div class="toolbar"><div class="field grow2"><label for="fq">Search</label><input id="fq" class="input" type="search" data-filter="q" value="${esc(f.q || '')}" placeholder="Name or ID"></div></div>
+  ${table(['Member', 'Phone', 'Login', 'Last sent', ''], page.map(u => { const last = S.v.credLog.filter(c => c.memberId === u.id).pop(), waiting = u.mustChange && u.tempPw; return [`${linkBtn('member-profile', u.id, u.name)}<small>${esc(u.id)}</small>`, esc(u.phone || '-'), waiting ? '<span class="badge b-pending">Temporary password stored</span>' : '<span class="badge b-active">Has own password</span>', last ? `${esc(fmtTS(last.at))}<small>by ${esc(last.by)}</small>` : '<small>Never sent from here</small>', `<div class="actions"><button class="btn btn-primary btn-sm" type="button" data-act="cred-send" data-id="${esc(u.id)}">${waiting ? 'View and resend' : 'Send new details'}</button></div>`]; }), ['No members match', ''])}${pager(list.length, f.page, CONFIG.PER_PAGE)}</section>`;
+}
+function regRequests() {
+  const list = S.v.requests.slice().sort((a, b) => b.at.localeCompare(a.at)), nw = list.filter(r => r.status === 'new').length;
+  return `<section class="panel"><div class="panel-h"><div><h2>Login requests</h2><p>First-time members ask for login details from the sign-in page. Check each name against your register. Only then issue their details.</p></div></div>${nw ? '' : '<div class="callout ok"><div><b>Nothing waiting</b><p>New requests from members will appear here.</p></div></div>'}
+  ${table(['Asked', 'Name on the request', 'Phone', 'Ward', 'Message', 'Status', ''], list.map(r => [esc(fmtTS(r.at)), `<b>${esc(r.name)}</b>`, esc(r.phone), esc(r.ward || '-'), esc(r.note || '-'), r.status === 'new' ? '<span class="badge b-pending">Waiting</span>' : r.status === 'issued' ? `<span class="badge b-verified">Issued</span><small>${esc(r.memberId)}, by ${esc(r.handledBy)}</small>` : `<span class="badge b-rejected">Declined</span><small>${esc(r.reason)}, by ${esc(r.handledBy)}</small>`, r.status === 'new' ? `<div class="actions"><button class="btn btn-primary btn-sm" type="button" data-act="req-check" data-id="${esc(r.id)}">Check register</button><button class="btn btn-ghost btn-sm" type="button" data-act="req-decline" data-id="${esc(r.id)}">Decline</button></div>` : '']), ['No requests yet', 'Members who need login details will appear here.'])}</section>`;
+}
+
+/* ----- Register modal: verify names, add a member, click a name for their history ----- */
+function mtgView(id) {
+  const m = getMtg(id), open = meetingOpen(m), pend = m.marks.filter(k => k.status === 'pending').length;
+  const people = S.v.users.filter(u => u.role === 'member' && (u.active || m.marks.some(k => k.memberId === u.id))).sort((a, b) => a.name.localeCompare(b.name));
+  const rows = people.map(u => { const k = m.marks.find(x => x.memberId === u.id), st = k ? k.status : 'absent';
+    const act = st === 'pending' ? `<button class="btn btn-leaf btn-sm" type="button" data-act="mtg-mark" data-id="${esc(m.id)}" data-m="${esc(u.id)}" data-s="verified">Verify</button><button class="btn btn-ghost btn-sm" type="button" data-act="mtg-mark" data-id="${esc(m.id)}" data-m="${esc(u.id)}" data-s="rejected">Reject</button>`
+      : st === 'verified' ? `<button class="btn btn-ghost btn-sm" type="button" data-act="mtg-remove" data-id="${esc(m.id)}" data-m="${esc(u.id)}">Remove</button>` : `<button class="btn btn-ghost btn-sm" type="button" data-act="mtg-mark" data-id="${esc(m.id)}" data-m="${esc(u.id)}" data-s="verified">Mark present</button>`;
+    return [`${linkBtn('member-profile', u.id, u.name)}<small>${esc(u.id)}</small>`, k ? esc(fmtTS(k.at)) + (k.addedByAdmin ? '<small>Added by admin</small>' : '') : '-', attBadge(st === 'absent' && open ? 'absent' : st), k && k.by ? `${esc(k.by)}<small>${esc(fmtTS(k.byAt))}</small>` : '-', `<div class="actions">${act}</div>`]; });
+  infoModal(m.title, `${esc(fmtDate(m.date))}. ${presentCount(m)} verified present, ${pend} waiting. ${open ? 'Register is open.' : 'Register is closed.'}`,
+    `<div class="btn-row" style="margin-top:12px">${pend ? `<button class="btn btn-leaf btn-sm" type="button" data-act="mtg-all" data-id="${esc(m.id)}">Verify all ${pend} waiting</button>` : ''}${open ? `<button class="btn btn-ghost btn-sm" type="button" data-act="mtg-close" data-id="${esc(m.id)}">Close register</button>` : ''}<button class="btn btn-ghost btn-sm" type="button" data-act="mtg-csv" data-id="${esc(m.id)}">Download CSV</button></div>
+    ${table(['Member', 'Marked at', 'Status', 'Checked by', ''], rows, ['No members', '']).replace(/<td>(<div class="actions">)/g, '<td>$1')}`);
+}
+Object.assign(ACTIONS, {
+  'mtg-open'() {
+    requireAdmin();
+    openModal({ title: "Open today's register", sub: 'Members can mark themselves present only while it is open, and only for today. You verify every name.', body: `<div class="field"><label for="mtT">Meeting</label><input id="mtT" name="title" class="input" maxlength="60" value="General meeting" required></div><div class="field"><label>Date</label><input class="input" value="${esc(fmtDate(today()))}" disabled><span class="hint">Registers open for today only. This stops anyone signing for a meeting that did not happen.</span></div>`, submit: 'Open register',
+      onSubmit: fd => { const t = (fd.get('title') || '').trim(); if (t.length < 3) throw new Error('Enter the meeting name.'); const m = API.openRegister(t); closeModal(); renderView(); toast('Register is open. Members can now mark attendance.', 'ok'); } });
+  },
+  'mtg-close'(el) { requireAdmin(); const m = getMtg(el.dataset.id); openModal({ title: 'Close the register?', sub: `${esc(m.title)}. Members will no longer be able to mark attendance. You can still verify names afterwards.`, body: '', submit: 'Close register', onSubmit: () => { API.closeRegister(m.id); closeModal(); renderView(); toast('Register closed.', 'ok'); } }); },
+  'mtg-view'(el) { mtgView(el.dataset.id); },
+  'mtg-mark'(el) { API.setMark(el.dataset.id, el.dataset.m, el.dataset.s); mtgView(el.dataset.id); renderSoon(); },
+  'mtg-remove'(el) { API.removeMark(el.dataset.id, el.dataset.m); mtgView(el.dataset.id); renderSoon(); },
+  'mtg-all'(el) { const n = API.verifyAll(el.dataset.id); toast(`${n} names verified.`, 'ok'); mtgView(el.dataset.id); renderSoon(); },
+  'mtg-csv'(el) { requireAdmin(); const m = getMtg(el.dataset.id), rows = [['Member ID', 'Name', 'Ward', 'Status', 'Marked at', 'Checked by']]; S.v.users.filter(u => u.role === 'member' && u.active).forEach(u => { const k = m.marks.find(x => x.memberId === u.id); rows.push([u.id, u.name, u.ward, k ? k.status : 'absent', k ? fmtTS(k.at) : '', k && k.by ? k.by : '']); }); csvDownload(`${S.v.code}-attendance-${m.date}.csv`, rows); },
+  'register-csv'() { requireAdmin(); const yr = new Date().getFullYear(), rows = [['Member ID', 'Name', 'Ward', 'Phone', 'Meetings attended', 'Meetings counted', 'Paid ' + yr, 'Owes', 'Account']]; S.v.users.filter(u => u.role === 'member').forEach(u => { const a = attendanceOf(u.id); rows.push([u.id, u.name, u.ward, u.phone, a.present, a.total, sum(memberPaid(u.id, yr)), memberOutstanding(u.id, yr), u.active ? 'Active' : 'Deactivated']); }); csvDownload(`${S.v.code}-member-register.csv`, rows); }
+});
+
+/* ----- Login details: show, copy, send on WhatsApp ----- */
+function credMessage(u) {
+  return `Hello ${u.name.split(' ')[0]}, here are your login details for ${S.v.name} on VillageVault.\nOpen the VillageVault website, choose "${S.v.name}" and sign in with:\nID: ${u.id}\nTemporary password: ${u.tempPw}\nYou will be asked to choose your own password the first time you sign in.\nFrom ${S.u.name}, ${S.u.title}.`;
+}
+async function credModal(id, forceNew, phone) {
+  const u = userById(id); if (!u) return;
+  try { if (!u.tempPw || forceNew) { await API.resetPassword(id, genPw()); renderSoon(); } } catch (e) { return toast(e.message, 'err'); }
+  const msg = credMessage(u), wa = waLinkTo(phone || u.phone, msg);
+  openModal({ title: 'Login details', size: 'modal-md', sub: `${esc(u.name)} (${esc(u.id)}). Send these to the member yourself. They choose their own password at first sign-in.`, submit: false,
+    body: `<div class="field" style="margin-top:14px"><label for="credText">Message to send</label><textarea id="credText" class="textarea copybox" rows="7" readonly>${esc(msg)}</textarea></div>
+    <div class="btn-row"><button class="btn btn-primary btn-sm" type="button" data-act="copy-cred" data-id="${esc(id)}">Copy message</button>${wa ? `<a class="btn btn-leaf btn-sm" href="${esc(wa)}" target="_blank" rel="noopener noreferrer" data-act="cred-sent" data-id="${esc(id)}" data-how="WhatsApp">Send on WhatsApp</a>` : '<span class="hint">Add the member\'s phone number to send on WhatsApp.</span>'}<button class="btn btn-ghost btn-sm" type="button" data-act="cred-new" data-id="${esc(id)}">Issue a new password</button></div>` });
+}
+Object.assign(ACTIONS, {
+  'cred-send'(el) {
+    requireAdmin(); const u = userById(el.dataset.id); if (!u) return;
+    if (u.tempPw) return credModal(u.id);
+    openModal({ title: 'Send new login details?', sub: `${esc(u.name)} already uses their own password. We never store it, so a new temporary password will be issued and their old one stops working.`, body: '', submit: 'Issue and show details', onSubmit: () => { closeModal(); credModal(u.id, true); } });
+  },
+  'cred-new'(el) { const u = userById(el.dataset.id); openModal({ title: 'Issue a new password?', sub: `${esc(u.name)}'s current temporary password will stop working.`, body: '', submit: 'Issue new password', onSubmit: () => { closeModal(); credModal(u.id, true); } }); },
+  'cred-sent'(el) { try { API.logCredSent(el.dataset.id, el.dataset.how); renderSoon(); } catch (_) {} },
+  'copy-cred'(el) {
+    const ta = $('#credText'); if (!ta) return; ta.select();
+    const ok = () => { try { API.logCredSent(el.dataset.id, 'Copied'); renderSoon(); } catch (_) {} toast('Message copied. Paste it into WhatsApp or SMS.', 'ok'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(ta.value).then(ok, () => { try { document.execCommand('copy'); } catch (_) {} ok(); }); else { try { document.execCommand('copy'); } catch (_) {} ok(); }
+  }
+});
+
+/* ----- First-time members: request login details from the sign-in page ----- */
+async function submitAccessRequest(vid, d) {
+  const vil = VILLAGES.find(x => x.id === vid); if (!vil || vil.removed) throw new Error('This village or association is not available.');
+  const v = await DB.load(vid); if (v.status === 'suspended') throw new Error('Access is paused for this village or association. Contact VillageVault support.');
+  if (v.requests.some(r => r.status === 'new' && waNum(r.phone) === waNum(d.phone))) throw new Error('You already asked. Your admin will contact you on that phone number.');
+  v.seq.req = (v.seq.req || 0) + 1; v.requests.push({ id: `${v.code}-R${String(v.seq.req).padStart(3, '0')}`, name: d.name, phone: d.phone, ward: d.ward, note: d.note, at: stamp(), status: 'new' });
+  if (!DB.save(v)) warnStorage();
+}
+ACTIONS['request-access'] = function () {
+  const vid = $('#heroVillage') && $('#heroVillage').value; if (!vid) return toast('Choose your village or association first.', 'err');
+  const vil = VILLAGES.find(x => x.id === vid);
+  openModal({ title: 'Request your login details', sub: `${esc(vil.name)}. Your admin will check your name on the village register, then send you your own login details.`,
+    body: `<div class="field"><label for="rqN">Your full name, as on the register</label><input id="rqN" name="name" class="input" maxlength="80" required></div><div class="form-row"><div class="field"><label for="rqP">Phone number</label><input id="rqP" name="phone" class="input" type="tel" maxlength="20" placeholder="0803 123 4567" required></div><div class="field"><label for="rqW">Ward</label><select id="rqW" name="ward" class="select">${wardOpts('')}</select></div></div><div class="field"><label for="rqM">Message (optional)</label><textarea id="rqM" name="note" class="textarea" maxlength="200" placeholder="For example your family or kindred name"></textarea></div>`, submit: 'Send request',
+    onSubmit: async fd => {
+      const d = { name: (fd.get('name') || '').trim(), phone: (fd.get('phone') || '').trim(), ward: fd.get('ward'), note: (fd.get('note') || '').trim() };
+      if (d.name.split(/\s+/).length < 2 || d.name.length < 5) throw new Error('Enter your full name as it appears on the register.'); if (waNum(d.phone).length < 12) throw new Error('Enter a valid phone number so your admin can reach you.');
+      await submitAccessRequest(vid, d); closeModal(); toast('Request sent. Your admin will contact you after checking the register.', 'ok');
+    } });
+};
+function matchScore(r, u) {
+  const tok = s => String(s).toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(x => x.length > 1), a = tok(r.name), b = tok(u.name);
+  return a.filter(x => b.includes(x)).length * 2 + (waNum(r.phone) && waNum(r.phone) === waNum(u.phone) ? 5 : 0);
+}
+Object.assign(ACTIONS, {
+  'req-check'(el) {
+    requireAdmin(); const r = S.v.requests.find(x => x.id === el.dataset.id); if (!r) return;
+    const members = S.v.users.filter(u => u.role === 'member').map(u => ({ u, s: matchScore(r, u) })).sort((a, b) => b.s - a.s || a.u.name.localeCompare(b.u.name)), top = members.filter(x => x.s > 0).slice(0, 4);
+    openModal({ title: 'Check the register', size: 'modal-lg', sub: `Request from ${esc(r.name)}, ${esc(r.phone)}. Confirm this person is on your register before you send anything.`,
+      body: `<div class="sec-title" style="margin-top:14px">Closest names on the register</div>${table(['Member', 'Ward', 'Phone', 'Why it matches'], top.map(x => [`${esc(x.u.name)}<small>${esc(x.u.id)}</small>`, esc(x.u.ward), esc(x.u.phone || '-'), waNum(r.phone) === waNum(x.u.phone) ? 'Same phone number' : 'Similar name']), ['No similar names found', 'If this person is not on the register, decline the request or add them from the Members page first.'])}
+      <div class="field"><label for="rcM">Member on the register</label><select id="rcM" name="member" class="select">${opt('', 'Choose the matching member', '')}${members.map(x => opt(x.u.id, `${x.u.name} (${x.u.id}), ${x.u.ward}${x.u.active ? '' : ', deactivated'}`, '')).join('')}</select></div>
+      <label class="check"><input type="checkbox" name="confirm"> <span>I have checked the village register and confirmed this person is a member.</span></label>`, submit: 'Issue login details',
+      onSubmit: async fd => {
+        const mid = fd.get('member'); if (!mid) throw new Error('Choose the member this request matches.'); if (!fd.get('confirm')) throw new Error('Tick the box to confirm you checked the register.');
+        const u = userById(mid); if (!u || !u.active) throw new Error('That member account is not active. Edit the member first.');
+        await API.resetPassword(mid, genPw()); API.resolveRequest(r.id, { status: 'issued', memberId: mid }); closeModal(); renderView(); credModal(mid, false, r.phone);
+      } });
+  },
+  'req-decline'(el) {
+    requireAdmin(); const r = S.v.requests.find(x => x.id === el.dataset.id); if (!r) return;
+    openModal({ title: 'Decline this request', danger: true, sub: `${esc(r.name)}, ${esc(r.phone)}`, body: `<div class="field"><label for="rdR">Reason</label><select id="rdR" name="reason" class="select">${opt('', 'Choose a reason', '')}${['Name not found on the register', 'Details do not match our records', 'Duplicate request', 'Other'].map(x => opt(x, x, '')).join('')}</select></div>`, submit: 'Decline request',
+      onSubmit: fd => { if (!fd.get('reason')) throw new Error('Choose a reason.'); API.resolveRequest(r.id, { status: 'declined', reason: fd.get('reason') }); done('Request declined.'); } });
+  }
+});
+
+/* ---------- Keep open tabs in step: when another tab (for example the admin verifying a payment) saves
+   a village, this tab picks up the change by itself ---------- */
+window.addEventListener('storage', e => {
+  if (!e.key || e.key.indexOf('vv_v1_') !== 0 || !e.newValue) return;
+  try {
+    const id = e.key.slice(6), d = JSON.parse(e.newValue); migrate(d); DB.cache[id] = d;
+    if (S.v && S.v.id === id) { S.v = d; if (S.u && S.u.id !== 'SUPPORT') { const nu = d.users.find(x => x.id === S.u.id); if (nu) S.u = nu; } if ($('#modalRoot').hidden) renderSoon(); }
+  } catch (_) {}
 });
 
 /* ---------- Start ---------- */
