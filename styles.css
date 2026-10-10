@@ -518,3 +518,31 @@ table.t.edit .input{min-height:42px}
 .chip{border:1px solid var(--line,#d6d6e6);background:#fff;border-radius:999px;padding:6px 12px;font:inherit;font-size:.85rem;cursor:pointer}
 .chip:hover{background:var(--nzu-2,#f3f3fb)}
 @media(max-width:640px){.plan-cols{grid-template-columns:1fr}.lv-row{grid-template-columns:auto 1fr;}.lv-amt{grid-column:2}}
+
+/* ===== Round 8 additions ===== */
+.member-strip{display:flex;flex-wrap:wrap;gap:12px 28px;padding:14px 18px;border:1px solid var(--line,#e3e3ee);border-radius:14px;background:#fff}
+.member-strip small{display:block;color:var(--ink-3,#666);font-size:.74rem;text-transform:uppercase;letter-spacing:.04em}
+.member-strip b{font-size:1rem}
+.callout.upgrade{border-color:#F5B83D;background:#FFF8E6}
+.upgrade-box .up-badge{margin-bottom:8px}
+ul.ticks{list-style:none;padding:0;margin:10px 0}
+ul.ticks li{padding:4px 0 4px 24px;position:relative}
+ul.ticks li:before{content:"✓";position:absolute;left:0;color:#12806A;font-weight:700}
+.sigprev{height:38px;max-width:120px;object-fit:contain;background:#fff;border:1px solid var(--line,#e3e3ee);border-radius:6px}
+.receipt-prev img{max-height:70vh;width:auto;max-width:100%;margin:0 auto;display:block}
+.medals{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+.medal-card{display:flex;gap:12px;padding:14px;border:1px solid var(--line,#e3e3ee);border-radius:14px;background:#fff;opacity:.72}
+.medal-card.got{opacity:1;border-color:#F5B83D;background:linear-gradient(135deg,#FFF8E6,#fff)}
+.medal{flex:0 0 46px;height:46px;border-radius:50%;display:grid;place-items:center;font-size:1.25rem;font-weight:700;background:#E7E8F3;color:#8A8FA8}
+.medal-card.got .medal{background:radial-gradient(circle at 30% 30%,#FFD76A,#C9962B);color:#1A1A4E;box-shadow:0 2px 8px rgba(201,150,43,.45)}
+.mc-body{display:flex;flex-direction:column;gap:4px;min-width:0}.mc-body small{color:var(--ink-3,#666)}
+.bar{height:6px;background:#E7E8F3;border-radius:999px;overflow:hidden}.bar i{display:block;height:100%;background:#12806A}
+.hall{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+.hall-card{display:flex;gap:14px;align-items:flex-start;padding:16px;border:1px solid var(--line,#e3e3ee);border-radius:16px;background:#fff;position:relative}
+.hall-card .sp-logo{width:64px;height:64px;border-radius:14px;flex:0 0 64px;object-fit:cover}
+.hall-rank{position:absolute;top:10px;right:14px;font-weight:800;font-size:1.4rem;color:#E0C985}
+.hall-body{display:flex;flex-direction:column;gap:5px;min-width:0}.hall-body small{color:var(--ink-3,#666)}
+.tier{align-self:flex-start;padding:2px 10px;border-radius:999px;font-size:.72rem;font-weight:700;color:#fff;background:var(--tc)}
+.stars{display:flex;gap:6px;margin:14px 0}.star{font-size:2.2rem;line-height:1;background:none;border:0;color:#D5D7E6;cursor:pointer;padding:0 2px}
+.star.on,.star:hover{color:#F5B83D}
+.rstars{color:#D99A18;letter-spacing:1px;white-space:nowrap}
