@@ -120,8 +120,9 @@ async function seedVillage(vil) {
   const users = [];
   const adminTitles = ['Chairman', 'Financial Secretary', 'Treasurer'];
   const off = Math.floor(R() * 9);
-  for (let i = 0; i < 3; i++) users.push({ id: `${code}-A${pad(i + 1)}`, name: `${FIRST[(i * 7 + off + 3) % 26]} ${LAST[(i * 3 + off + 5) % 20]}`, role: 'admin', title: adminTitles[i], ...famKin(i, off), phone: `0803${Math.floor(1000000 + R() * 8999999)}`, email: '', joined: '2019-01-15', active: true });
-  for (let i = 0; i < 22; i++) users.push({ id: `${code}-M${String(i + 1).padStart(3, '0')}`, name: `${FIRST[(i * 3 + off) % 26]} ${LAST[(i * 5 + off) % 20]}`, role: 'member', title: 'Member', ...famKin(i, off), phone: `080${Math.floor(10000000 + R() * 89999999)}`, email: '', joined: `${2012 + Math.floor(R() * 10)}-${pad(1 + Math.floor(R() * 12))}-10`, active: i !== 21 });
+  const POOL = vil.wing === 'men' ? FIRST.filter((_, i) => i % 2 === 0) : vil.wing === 'women' ? FIRST.filter((_, i) => i % 2 === 1) : FIRST, NM = vil.wing ? 10 : 22;   // wings: gender-matched first names and a smaller starter register
+  for (let i = 0; i < 3; i++) users.push({ id: `${code}-A${pad(i + 1)}`, name: `${POOL[(i * 7 + off + 3) % POOL.length]} ${LAST[(i * 3 + off + 5) % 20]}`, role: 'admin', title: adminTitles[i], ...famKin(i, off), phone: `0803${Math.floor(1000000 + R() * 8999999)}`, email: '', joined: '2019-01-15', active: true });
+  for (let i = 0; i < NM; i++) users.push({ id: `${code}-M${String(i + 1).padStart(3, '0')}`, name: `${POOL[(i * 3 + off) % POOL.length]} ${LAST[(i * 5 + off) % 20]}`, role: 'member', title: 'Member', ...famKin(i, off), phone: `080${Math.floor(10000000 + R() * 89999999)}`, email: '', joined: `${2012 + Math.floor(R() * 10)}-${pad(1 + Math.floor(R() * 12))}-10`, active: i !== NM - 1 });
   await Promise.all(users.map(async u => { u.hash = await hashPw(vil.id, u.id, `${code.toLowerCase()}-${u.role}`); }));
   const admins = users.filter(u => u.role === 'admin'), members = users.filter(u => u.role === 'member');
   const tx = [], audit = [];
@@ -168,7 +169,7 @@ async function seedVillage(vil) {
     expenses.push(e);
     audit.push({ id: 'L' + (++lseq), ts: e.createdAt, adminId: fin.id, adminName: fin.name, adminTitle: fin.title, action: 'Recorded expense', target: e.id, detail: `${e.category}: ${e.description}, ${money(e.amount)}` });
   });
-  return { id: vil.id, name: vil.name, code, settings, users, tx, expenses, audit, seq: { tx: seq, exp: items.length, aud: lseq, mbr: 22 }, seededAt: stamp() };
+  return { id: vil.id, name: vil.name, code, settings, users, tx, expenses, audit, seq: { tx: seq, exp: items.length, aud: lseq, mbr: NM }, seededAt: stamp(), ...(vil.wing ? { type: vil.type, plan: wingPlan(vil.parent) } : {}) };
 }
 
 /* ---------- Bring older saved data up to date (adds the newer fields) ---------- */
@@ -177,6 +178,7 @@ const BANKS = ['First Bank of Nigeria', 'Guaranty Trust Bank', 'Access Bank', 'U
 function migrate(v) {
   v.settings = v.settings || { levies: {} }; v.settings.levies = v.settings.levies || {};
   v.pledges = v.pledges || []; v.type = v.type || 'village';
+  v.minutes = v.minutes || []; if (!v.meetingTypes) v.meetingTypes = [['General meeting', 0], ['Executive and elders meeting', 1], ['Annual general meeting', 0], ['Emergency meeting', 0]].map((t, i) => ({ id: 'T' + (i + 1), name: t[0], exec: !!t[1], removed: false }));
   v.users.forEach((u, i) => {
     if (u.title === 'President General') u.title = 'Chairman';
     if (v.type === 'village') { if (u.family === undefined && u.kindred === undefined) { Object.assign(u, famKin(i, v.id.length)); } }
@@ -190,6 +192,7 @@ function migrate(v) {
   if (!v.settings.accounts) v.settings.accounts = [{ id: 'B1', bank: BANKS[Math.floor(R() * BANKS.length)], number: String(Math.floor(1000000000 + R() * 8999999999)), name: `${v.name} Union` }];
   if (v.settings.payNote == null) v.settings.payNote = 'Pay into the account above, then upload your proof of payment on this site. Never pay cash to anyone except the treasurer.';
   v.plan = v.plan || (['umuokpu', 'amakwu', 'ezinkwo'].indexOf(v.id) >= 0 ? 'premium' : 'basic');
+  enforcePlanRegistry(v);
   if (v.logo === undefined) v.logo = null;
   v.requests = v.requests || []; v.credLog = v.credLog || []; v.seq = v.seq || {};
   if (!v.meetings) {
@@ -201,6 +204,7 @@ function migrate(v) {
     });
     v.seq.mtg = v.meetings.length;
   }
+  v.meetings && v.meetings.forEach(m => { if (m.typeId === undefined) { const t = v.meetingTypes.find(x => x.name.toLowerCase() === String(m.title || '').trim().toLowerCase()); m.typeId = t ? t.id : ''; m.exec = !!(t && t.exec); } });
   return v;
 }
 
@@ -209,11 +213,11 @@ const DB = {
   cache: {},
   async load(id) {
     if (this.cache[id]) return this.cache[id];
-    const vil = VILLAGES.find(v => v.id === id); if (!vil) throw new Error('Unknown village.');
+    const vil = vilById(id); if (!vil) throw new Error('Unknown village.');
     let data = null; const raw = lsGet('vv_v1_' + id);
     if (raw) { try { data = JSON.parse(raw); } catch (_) { data = null; } }
-    if (!data) { data = await seedVillage(vil); }
-    migrate(data); lsSet('vv_v1_' + id, JSON.stringify(data));
+    if (!data) { data = vil.wing ? await seedWing(vil) : await seedVillage(vil); }
+    migrate(data); if (vil.wing) syncWing(data, vil); lsSet('vv_v1_' + id, JSON.stringify(data));
     this.cache[id] = data; return data;
   },
   save(v) { return lsSet('vv_v1_' + v.id, JSON.stringify(v)); }
@@ -259,17 +263,27 @@ const isReadonly = () => !!S.v && S.v.status === 'readonly' && !S.owner;
 function requireWritable() { if (isReadonly()) throw new Error('This village is in read-only mode right now. Contact VillageVault support.'); }
 function requireAdmin() { if (!S.u || S.u.role !== 'admin' || !S.u.active) throw new Error('Only a village admin can do this.'); requireWritable(); }
 function log(action, target, detail) {
+  REV++;
   // Anything the owner does inside a village goes to the owner's private log only, so villages never see it.
   if (S.owner) { olog(action, S.v.name, `${target}: ${detail}`); OWN.save(); return; }
   S.v.seq.aud = (S.v.seq.aud || 0) + 1;
   S.v.audit.push({ id: 'L' + S.v.seq.aud, ts: stamp(), adminId: S.u.id, adminName: S.u.name, adminTitle: S.u.title, action, target, detail });
 }
-function commit() { if (!DB.save(S.v)) warnStorage(); }
+let REV = 0;
+function commit() { REV++; if (!DB.save(S.v)) warnStorage(); }
 function nextId(kind, prefix) { S.v.seq[kind] = (S.v.seq[kind] || 0) + 1; return `${S.v.code}-${prefix}${String(S.v.seq[kind]).padStart(prefix === 'T' ? 4 : 3, '0')}`; }
 
 const visibleTx = () => isAdmin() ? S.v.tx : S.v.tx.filter(t => t.memberId === S.u.id);
 const myTx = () => S.v.tx.filter(t => t.memberId === S.u.id);
-const villageTx = () => S.v.tx.filter(t => t.status === 'verified');
+/* Verified payments, indexed once per change and per member (was re-filtered for every member on every render). */
+const TXC = { v: null, rev: -1, len: -1, ver: [], byM: new Map() };
+function txIndex() {
+  const tx = S.v.tx; if (TXC.v === S.v && TXC.rev === REV && TXC.len === tx.length) return TXC;
+  TXC.v = S.v; TXC.rev = REV; TXC.len = tx.length; TXC.ver = []; TXC.byM = new Map();
+  for (let i = 0; i < tx.length; i++) { const t = tx[i]; if (t.status !== 'verified') continue; TXC.ver.push(t); let a = TXC.byM.get(t.memberId); if (!a) TXC.byM.set(t.memberId, a = []); a.push(t); }
+  return TXC;
+}
+const villageTx = () => txIndex().ver.slice();
 const activeExp = () => S.v.expenses.filter(e => e.status !== 'void');
 const pendingTx = () => S.v.tx.filter(t => t.status === 'pending');
 const getTx = id => { const t = S.v.tx.find(x => x.id === id); if (!t) throw new Error('Record not found.'); if (!isAdmin() && t.memberId !== S.u.id) throw new Error('You can only open your own records.'); return t; };
@@ -400,7 +414,7 @@ const API = {
 };
 
 /* ---------- Money helpers ---------- */
-function memberPaid(id, year) { return villageTx().filter(t => t.memberId === id && yearOf(t.date) === year); }
+function memberPaid(id, year) { return (txIndex().byM.get(id) || []).filter(t => yearOf(t.date) === year); }
 function memberOutstanding(id, year) {
   const paid = memberPaid(id, year); let o = 0;
   levies().filter(l => l.fixed).forEach(l => { o += Math.max(0, (S.v.settings.levies[l.id] || 0) - sum(paid.filter(t => t.levy === l.id))); });
@@ -520,7 +534,7 @@ function proofHTML(p) {
 const badge = s => `<span class="badge b-${esc(s)}">${esc(cap(s))}</span>`;
 function table(heads, rows, empty) {
   if (!rows.length) return `<div class="tablewrap"><div class="empty"><b>${esc(empty[0])}</b>${esc(empty[1] || '')}</div></div>`;
-  return `<div class="tablewrap"><table class="t"><thead><tr>${heads.map(h => `<th${h.num ? ' class="num"' : ''}>${esc(h.t != null ? h.t : h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map((c, i) => `<td${heads[i] && heads[i].num ? ' class="num"' : ''}>${c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  return `<div class="tablewrap"><table class="t"><thead><tr>${heads.map(h => `<th scope="col"${h.num ? ' class="num"' : ''}>${esc(h.t != null ? h.t : h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map((c, i) => `<td${heads[i] && heads[i].num ? ' class="num"' : ''}>${c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
 function pager(total, page, per) {
   const pages = Math.max(1, Math.ceil(total / per)); if (total <= per) return `<div class="pager"><span>${total} record${total === 1 ? '' : 's'}</span></div>`;
@@ -600,15 +614,37 @@ class PDF {
   constructor(w, h) { this.W = w || 595.28; this.H = h || 841.89; this.pages = []; this.imgs = []; this.add(); }
   img(dataUrl, x, y, w, h, sw, sh) { try { const bin = atob(String(dataUrl).split(',')[1]); this.imgs.push({ bin, w: sw || 200, h: sh || 200 }); this.p.push(`q ${w.toFixed(2)} 0 0 ${h.toFixed(2)} ${x.toFixed(2)} ${(this.H - y - h).toFixed(2)} cm /Im${this.imgs.length - 1} Do Q`); } catch (_) {} }
   add() { this.p = []; this.pages.push(this.p); return this.p; }
+  /* Text with letters Helvetica cannot draw (Igbo dot-below, tone marks, the naira sign) is drawn as a sharp 1-bit mask in the right colour,
+     with an invisible plain copy underneath so the PDF stays searchable. */
+  static norm(s) { return String(s == null ? '' : s).normalize('NFC').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, '-'); }
+  static needs(s) { return /[^\x20-\x7E]/.test(PDF.norm(s).replace(/₦/g, 'N')); }
+  static ctx() { if (!PDF._c) { PDF._c = document.createElement('canvas'); PDF._g = PDF._c.getContext('2d', { willReadFrequently: true }); } return PDF._g; }
+  static font(size, bold, k) { return `${bold ? 700 : 400} ${size * k}px Arial, "Segoe UI", "Noto Sans", "DejaVu Sans", Helvetica, sans-serif`; }
+  rasterText(s, x, y, o, size, wd) {
+    const k = 6, g = PDF.ctx(), c = PDF._c, pad = 2, hpt = size * 1.5, base = size * 1.15, key = `${s}|${size}|${o.bold ? 1 : 0}`;
+    this._rc = this._rc || new Map(); let idx = this._rc.get(key), wpx;
+    if (idx != null) { wpx = this.imgs[idx].w; } else {
+    wpx = Math.max(1, Math.ceil((wd + 2 * pad) * k)); const hpx = Math.ceil(hpt * k); c.width = wpx; c.height = hpx;
+    g.clearRect(0, 0, wpx, hpx); g.font = PDF.font(size, o.bold, k); g.fillStyle = '#000'; g.textBaseline = 'alphabetic'; g.fillText(PDF.norm(s), pad * k, base * k);
+    const d = g.getImageData(0, 0, wpx, hpx).data, rb = Math.ceil(wpx / 8); let bin = '';
+    for (let r = 0; r < hpx; r++) for (let b = 0; b < rb; b++) { let v = 0xFF; for (let bit = 0; bit < 8; bit++) { const px = b * 8 + bit; if (px < wpx && d[(r * wpx + px) * 4 + 3] >= 110) v &= ~(0x80 >> bit); } bin += String.fromCharCode(v); }
+    this.imgs.push({ mask: true, bin, w: wpx, h: hpx }); idx = this.imgs.length - 1; this._rc.set(key, idx); }
+    const X = x - pad, Y = this.H - y - (hpt - base);
+    this.p.push(`q ${this.rgb(o.color || '#14142B')} rg ${(wpx / k).toFixed(2)} 0 0 ${hpt.toFixed(2)} ${X.toFixed(2)} ${Y.toFixed(2)} cm /Im${idx} Do Q`);
+    this.p.push(`BT 3 Tr /${o.bold ? 'F2' : 'F1'} ${size} Tf ${x.toFixed(2)} ${(this.H - y).toFixed(2)} Td (${PDF.a(s).replace(/([\\()])/g, '\\$1')}) Tj 0 Tr ET`);
+  }
   static a(s) { return String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/₦/g, 'N').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, '-').replace(/[^\x20-\x7E]/g, '?'); }
-  w(s, size, bold) { s = PDF.a(s); let t = 0; for (let i = 0; i < s.length; i++) t += HELV[s.charCodeAt(i) - 32] || 556; return t * size / 1000 * (bold ? 1.05 : 1); }
-  fit(s, maxW, size, bold) { s = PDF.a(s); if (this.w(s, size, bold) <= maxW) return s; while (s.length > 1 && this.w(s + '..', size, bold) > maxW) s = s.slice(0, -1); return s + '..'; }
+  w(s, size, bold) { if (PDF.needs(s)) { const g = PDF.ctx(); g.font = PDF.font(size, bold, 10); return g.measureText(PDF.norm(s)).width / 10; } s = PDF.a(s); let t = 0; for (let i = 0; i < s.length; i++) t += HELV[s.charCodeAt(i) - 32] || 556; return t * size / 1000 * (bold ? 1.05 : 1); }
+  fit(s, maxW, size, bold) { if (PDF.needs(s) || /₦/.test(s)) { s = PDF.norm(s); if (this.w(s, size, bold) <= maxW) return s; while (s.length > 1 && this.w(s + '..', size, bold) > maxW) s = s.slice(0, -1); return s + '..'; } s = PDF.a(s); if (this.w(s, size, bold) <= maxW) return s; while (s.length > 1 && this.w(s + '..', size, bold) > maxW) s = s.slice(0, -1); return s + '..'; }
   rgb(hex) { const n = parseInt(hex.slice(1), 16); return [(n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255].map(x => x.toFixed(3)).join(' '); }
   rect(x, y, w, h, fill) { this.p.push(`${this.rgb(fill)} rg ${x.toFixed(2)} ${(this.H - y - h).toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)} re f`); }
   line(x1, y1, x2, y2, color, lw) { this.p.push(`${lw || .6} w ${this.rgb(color || '#DCE3E0')} RG ${x1.toFixed(2)} ${(this.H - y1).toFixed(2)} m ${x2.toFixed(2)} ${(this.H - y2).toFixed(2)} l S`); }
   text(s, x, y, o) {
-    o = o || {}; const size = o.size || 10; s = PDF.a(s); let xx = x; const wd = this.w(s, size, o.bold);
+    o = o || {}; const size = o.size || 10; const wd = this.w(s, size, o.bold); let xx = x;
     if (o.align === 'right') xx = x - wd; else if (o.align === 'center') xx = x - wd / 2;
+    if (PDF.needs(s)) return this.rasterText(s, xx, y, o, size, wd);
+    if (/₦/.test(s)) { let cx = xx; PDF.norm(s).split(/(₦)/).forEach(seg => { if (!seg) return; const sw = this.w(seg, size, o.bold); if (seg === '₦') this.rasterText('₦', cx, y, o, size, sw); else this.text(seg, cx, y, Object.assign({}, o, { align: 'left' })); cx += sw; }); return; }
+    s = PDF.a(s);
     s = s.replace(/([\\()])/g, '\\$1');
     this.p.push(`BT /${o.bold ? 'F2' : 'F1'} ${size} Tf ${this.rgb(o.color || '#14142B')} rg ${xx.toFixed(2)} ${(this.H - y).toFixed(2)} Td (${s}) Tj ET`);
   }
@@ -622,7 +658,7 @@ class PDF {
     objs[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
     objs[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
     let id = 5; const xo = [];
-    this.imgs.forEach((im, i) => { const oid = id++; xo.push(`/Im${i} ${oid} 0 R`); objs[oid] = `<< /Type /XObject /Subtype /Image /Width ${im.w} /Height ${im.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${im.bin.length} >>\nstream\n${im.bin}\nendstream`; });
+    this.imgs.forEach((im, i) => { const oid = id++; xo.push(`/Im${i} ${oid} 0 R`); objs[oid] = im.mask ? `<< /Type /XObject /Subtype /Image /Width ${im.w} /Height ${im.h} /ImageMask true /BitsPerComponent 1 /Length ${im.bin.length} >>\nstream\n${im.bin}\nendstream` : `<< /Type /XObject /Subtype /Image /Width ${im.w} /Height ${im.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${im.bin.length} >>\nstream\n${im.bin}\nendstream`; });
     this.pages.forEach(pg => {
       const pid = id++, cid = id++, stream = (this.wm ? this.wmOps() + '\n' : '') + pg.join('\n'); kids.push(pid + ' 0 R');
       objs[pid] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${this.W} ${this.H}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >>${xo.length ? ` /XObject << ${xo.join(' ')} >>` : ''} >> /Contents ${cid} 0 R >>`;
@@ -639,7 +675,7 @@ class PDF {
     return new Blob([bytes], { type: 'application/pdf' });
   }
 }
-const pm = n => 'NGN ' + Math.round(n || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+const pm = n => '₦' + Math.round(n || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
 function reportPdf(rep) {
   const pdf = new PDF(), M = 40, CW = pdf.W - 80, INK = '#14142B', MUT = '#5B5F7A';
@@ -688,7 +724,7 @@ function reportPdf(rep) {
   if (rep.monthly) {
     title('Income by month'); ensure(150);
     const max = niceMax(Math.max(1, ...rep.monthly.map(m => m.value))), ch = 100, bwid = CW / 12;
-    for (let i = 0; i <= 2; i++) { const gy = y + ch - ch * i / 2; pdf.line(M + 40, gy, M + CW, gy, '#E6ECE9'); pdf.text(pm(max * i / 2).replace('NGN ', ''), M + 34, gy + 3, { size: 7, color: MUT, align: 'right' }); }
+    for (let i = 0; i <= 2; i++) { const gy = y + ch - ch * i / 2; pdf.line(M + 40, gy, M + CW, gy, '#E6ECE9'); pdf.text(pm(max * i / 2).replace('₦', ''), M + 34, gy + 3, { size: 7, color: MUT, align: 'right' }); }
     rep.monthly.forEach((m, i) => { const h = ch * m.value / max, x = M + 40 + i * ((CW - 40) / 12) + 5; pdf.rect(x, y + ch - h, (CW - 40) / 12 - 10, h, i % 2 ? '#F5B83D' : '#1A1A4E'); pdf.text(m.label, x + ((CW - 40) / 12 - 10) / 2, y + ch + 11, { size: 7, color: MUT, align: 'center' }); });
     y += ch + 28;
   }
@@ -700,8 +736,8 @@ function reportPdf(rep) {
     title('Member contributions');
     const cw = [62, 118, 50, 50, 50, 50, 50, 85];
     tbl([{ h: 'ID', w: cw[0] }, { h: 'Member', w: cw[1] }, { h: 'Annual', w: cw[2], align: 'right' }, { h: 'Burial', w: cw[3], align: 'right' }, { h: 'Insur.', w: cw[4], align: 'right' }, { h: 'Party', w: cw[5], align: 'right' }, { h: 'Support', w: cw[6], align: 'right' }, { h: 'Total', w: cw[7], align: 'right' }].map((c, i) => { c.w = [60, 120, 52, 52, 52, 52, 52, 75][i]; return c; }),
-      rep.members.map(m => ({ cells: [m.id, m.name, ...['annual', 'burial', 'insurance', 'party', 'support'].map(k => m.per[k] ? Math.round(m.per[k]).toLocaleString('en-US') : '-'), pm(m.total).replace('NGN ', '')] }))
-        .concat([{ total: 1, cells: ['', 'Total', ...['annual', 'burial', 'insurance', 'party', 'support'].map(k => Math.round(rep.byLevy.find(l => l.id === k).amount).toLocaleString('en-US')), pm(rep.income).replace('NGN ', '')] }]));
+      rep.members.map(m => ({ cells: [m.id, m.name, ...['annual', 'burial', 'insurance', 'party', 'support'].map(k => m.per[k] ? Math.round(m.per[k]).toLocaleString('en-US') : '-'), pm(m.total).replace('₦', '')] }))
+        .concat([{ total: 1, cells: ['', 'Total', ...['annual', 'burial', 'insurance', 'party', 'support'].map(k => Math.round(rep.byLevy.find(l => l.id === k).amount).toLocaleString('en-US')), pm(rep.income).replace('₦', '')] }]));
     title('Expenditure');
     tbl([{ h: 'Date', w: 66 }, { h: 'Category', w: 130 }, { h: 'Description', w: 219 }, { h: 'Amount', w: 100, align: 'right' }],
       rep.expenses.map(e => ({ cells: [fmtDate(e.date), e.category, e.description, pm(e.amount)] })).concat(rep.expenses.length ? [{ total: 1, cells: ['', 'Total', '', pm(rep.expense)] }] : [{ cells: ['No spending recorded in this period', '', '', ''] }]));
@@ -729,11 +765,11 @@ function downloadReport(kind, year, month, memberId) {
 
 /* ---------- Shell and navigation ---------- */
 const NAV = {
-  member: [['overview', 'My dashboard', 'home'], ['village', 'Village dashboard', 'village'], ['achievements', 'My achievements', 'check'], ['halloffame', 'Sponsors hall of fame', 'coin']],
-  admin: [['overview', 'Overview', 'home'], ['verify', 'Verify payments', 'check'], ['transactions', 'Transactions', 'list'], ['outstanding', 'Outstanding bills', 'coin'], ['pledges', 'Pledges', 'coin'], ['members', 'Members', 'users'], ['admins', 'Admins and duties', 'users'], ['register', 'Register', 'book'], ['expenses', 'Expenditure', 'coin'], ['levies', 'Levy categories', 'sliders'], ['profile', 'Village profile', 'village'], ['reports', 'Reports', 'file'], ['audit', 'Activity log', 'clock'], ['achievements', 'My achievements', 'check'], ['halloffame', 'Sponsors hall of fame', 'coin']],
-  owner: [['o-overview', 'All villages', 'home'], ['o-villages', 'Manage villages', 'village'], ['o-admins', 'Village admins', 'users'], ['o-sponsors', 'Sponsors', 'coin'], ['o-reviews', 'Reviews', 'check'], ['o-log', 'Owner activity', 'clock'], ['o-account', 'My account', 'user']]
+  member: [['overview', 'My dashboard', 'home'], ['village', 'Village dashboard', 'village'], ['achievements', 'My achievements', 'check'], ['halloffame', 'Sponsors hall of fame', 'coin'], ['minutes', 'Minutes', 'book']],
+  admin: [['overview', 'Overview', 'home'], ['verify', 'Verify payments', 'check'], ['transactions', 'Transactions', 'list'], ['outstanding', 'Outstanding bills', 'coin'], ['pledges', 'Pledges', 'coin'], ['members', 'Members', 'users'], ['admins', 'Admins and duties', 'users'], ['register', 'Register', 'book'], ['minutes', 'Minutes', 'book'], ['expenses', 'Expenditure', 'coin'], ['levies', 'Levy categories', 'sliders'], ['profile', 'Village profile', 'village'], ['reports', 'Reports', 'file'], ['audit', 'Activity log', 'clock'], ['achievements', 'My achievements', 'check'], ['halloffame', 'Sponsors hall of fame', 'coin']],
+  owner: [['o-overview', 'All villages', 'home'], ['o-villages', 'Manage villages', 'village'], ['o-admins', 'Village admins', 'users'], ['o-sponsors', 'Sponsors', 'coin'], ['o-insights', 'Insights', 'list'], ['o-reviews', 'Reviews', 'check'], ['o-log', 'Owner activity', 'clock'], ['o-account', 'My account', 'user']]
 };
-const TITLES = { overview: 'Overview', village: 'Village dashboard', reports: 'Reports', verify: 'Verify payments', transactions: 'Transactions', members: 'Members', expenses: 'Expenditure', levies: 'Levy categories', outstanding: 'Outstanding bills', pledges: 'Pledges', admins: 'Admins and duties', achievements: 'My achievements', halloffame: 'Sponsors hall of fame', 'o-reviews': 'Reviews', register: 'Register', profile: 'Village profile', audit: 'Activity log', 'o-overview': 'All villages', 'o-villages': 'Manage villages', 'o-admins': 'Village admins', 'o-sponsors': 'Sponsors', 'o-log': 'Owner activity', 'o-account': 'My account' };
+const TITLES = { overview: 'Overview', village: 'Village dashboard', reports: 'Reports', verify: 'Verify payments', transactions: 'Transactions', members: 'Members', expenses: 'Expenditure', levies: 'Levy categories', outstanding: 'Outstanding bills', pledges: 'Pledges', admins: 'Admins and duties', achievements: 'My achievements', halloffame: 'Sponsors hall of fame', minutes: 'Meeting minutes', 'o-insights': 'Insights', 'o-reviews': 'Reviews', register: 'Register', profile: 'Village profile', audit: 'Activity log', 'o-overview': 'All villages', 'o-villages': 'Manage villages', 'o-admins': 'Village admins', 'o-sponsors': 'Sponsors', 'o-log': 'Owner activity', 'o-account': 'My account' };
 const inOwnerConsole = () => S.owner && !S.v;
 const roleKey = () => inOwnerConsole() ? 'owner' : (isAdmin() ? 'admin' : 'member');
 function pageTitleText() {
@@ -742,10 +778,10 @@ function pageTitleText() {
 }
 
 function renderApp() {
-  const ownerMode = inOwnerConsole(), vil = ownerMode ? null : VILLAGES.find(v => v.id === S.v.id), rk = roleKey();
+  const ownerMode = inOwnerConsole(), vil = ownerMode ? null : vilById(S.v.id), rk = roleKey();
   const head = ownerMode
     ? `<div class="side-village"><div class="vbadge" style="background:#F5B83D;color:#1A1A4E">VV</div><div><b>Owner console</b><small>All villages</small></div></div>`
-    : `<div class="side-village">${S.v.logo ? `<img class="vlogo" src="${esc(S.v.logo)}" alt="">` : `<div class="vbadge" style="background:${vil.color};color:#fff">${esc(vil.code)}</div>`}<div><b>${esc(S.v.name)}</b><small>${S.owner ? 'Owner view' : 'Village or association'}</small></div></div>`;
+    : `<div class="side-village">${S.v.logo ? `<img class="vlogo" src="${esc(S.v.logo)}" alt="">` : `<div class="vbadge" style="background:${vil.color};color:#fff">${esc(vil.code)}</div>`}<div><b>${esc(S.v.name)}</b><small>${S.owner ? 'Owner view' : (S.v.wing ? wingLabel(S.v.wing) : 'Village or association')}</small></div></div>`;
   const who = ownerMode ? { n: OWN.data.name, s: 'Master admin' } : { n: S.u.name, s: S.owner ? 'Owner view of this village' : `${S.u.title}, ${S.u.id}` };
   const top = rk === 'member' ? '<button class="btn btn-saffron btn-sm" type="button" data-act="upload-proof">Upload proof</button>' : rk === 'admin' ? ('<button class="btn btn-saffron btn-sm" type="button" data-act="add-tx">Add payment</button>' + (S.u && S.u.id !== 'SUPPORT' && !S.owner ? '<button class="btn btn-ghost btn-sm" type="button" data-act="upload-proof">Upload my proof</button>' : '')) : '';
   $('#app').innerHTML = `<div class="shell">
@@ -770,7 +806,7 @@ function renderApp() {
 }
 function renderNav() {
   const rk = roleKey(), pend = rk === 'admin' ? pendingTx().length : 0, regN = rk === 'admin' ? S.v.requests.filter(r => r.status === 'new').length + S.v.meetings.reduce((a, m) => a + m.marks.filter(k => k.status === 'pending').length, 0) : 0, owN = rk === 'admin' ? owingList(new Date().getFullYear(), {}).length : 0;
-  $('#navlist').innerHTML = NAV[rk].map(n => `<button type="button" data-act="goto" data-page="${n[0]}" class="${S.page === n[0] ? 'active' : ''}"${S.page === n[0] ? ' aria-current="page"' : ''}>${icon(n[2])}${n[1]}${n[0] === 'verify' && pend ? `<span class="count">${pend}</span>` : ''}${n[0] === 'register' && regN ? `<span class="count">${regN}</span>` : ''}${n[0] === 'outstanding' && owN ? `<span class="count count-soft">${owN}</span>` : ''}</button>`).join('');
+  $('#navlist').innerHTML = NAV[rk].filter(n => !(n[0] === 'minutes' && rk === 'member' && S.v && S.v.plan !== 'premium')).map(n => `<button type="button" data-act="goto" data-page="${n[0]}" class="${S.page === n[0] ? 'active' : ''}"${S.page === n[0] ? ' aria-current="page"' : ''}>${icon(n[2])}${n[1]}${n[0] === 'verify' && pend ? `<span class="count">${pend}</span>` : ''}${n[0] === 'register' && regN ? `<span class="count">${regN}</span>` : ''}${n[0] === 'outstanding' && owN ? `<span class="count count-soft">${owN}</span>` : ''}</button>`).join('');
 }
 function renderView() {
   const ae = document.activeElement, keep = ae && ae.dataset ? { k: ae.dataset.filter, s: ae.selectionStart, e: ae.selectionEnd } : null;
@@ -1115,13 +1151,13 @@ function changePwModal(force) {
 
 /* ---------- Village access (landing page) ---------- */
 let attempts = 0, lockUntil = 0;
-function villageSelectHTML(sel) { return `<option value="" disabled${sel ? '' : ' selected'}>Select your village or association</option>` + liveVillages().map(v => opt(v.id, `${v.name} (${v.code})`, sel)).join(''); }
+function villageSelectHTML(sel) { return `<option value="" disabled${sel ? '' : ' selected'}>Select your village or association</option>` + liveVillages().flatMap(v => [v, ...wingsOf(v)]).map(v => opt(v.id, `${v.wing ? '\u00A0\u00A0\u21B3 ' : ''}${v.name} (${v.code})`, sel)).join(''); }
 function fillVillageSelects() {
   $$('[data-village-select]').forEach(s => { s.innerHTML = villageSelectHTML(''); });
   const nav = $('#navVillage'); if (nav) nav.options[0].textContent = 'Village or association'; const g = $('#villageGrid'); if (g) g.innerHTML = liveVillages().map(v => `<button type="button" class="vcard" style="--vc:${v.color}" data-act="pick-village" data-village="${v.id}"><b>${esc(v.name)}</b><span>${esc(v.code)}, ${esc(v.tag)}</span><em>Open this village</em></button>`).join('');
 }
 function pickVillage(id) {
-  const v = VILLAGES.find(x => x.id === id); if (!v) return;
+  const v = vilById(id); if (!v) return;
   $$('[data-village-select]').forEach(s => { s.value = id; });
   $('#accessForm').hidden = false; formError('', 'loginError'); updateDemo();
   const box = $('#access'); box.scrollIntoView({ behavior: 'smooth', block: 'center' }); box.classList.remove('pulse'); void box.offsetWidth; box.classList.add('pulse');
@@ -1131,7 +1167,7 @@ function pickVillage(id) {
 }
 function focusAccess() { const sel = $('#heroVillage'); $('#access').scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(() => sel.focus({ preventScroll: true }), 350); }
 function updateDemo() {
-  const box = $('#demoBox'), id = $('#heroVillage').value, v = VILLAGES.find(x => x.id === id);
+  const box = $('#demoBox'), id = $('#heroVillage').value, v = vilById(id);
   if (!CONFIG.DEMO_MODE || !v) { box.hidden = true; return; }
   const c = v.code.toLowerCase(); box.hidden = false;
   box.innerHTML = `<b>Demo access for ${esc(v.name)}</b><br>Admin: <code>${v.code}-A02</code> password <code>${c}-admin</code><br>Member: <code>${v.code}-M001</code> password <code>${c}-member</code><div class="demo-btns"><button type="button" class="btn btn-ghost btn-sm" data-act="demo-fill" data-id="${v.code}-A02" data-pw="${c}-admin">Fill admin</button><button type="button" class="btn btn-ghost btn-sm" data-act="demo-fill" data-id="${v.code}-M001" data-pw="${c}-member">Fill member</button></div>`;
@@ -1151,7 +1187,7 @@ function forgetRemember(vid, v) {
   if (r && v) { const u = v.users.find(x => x.id === r.u); if (u) { u.rememberTokens = (u.rememberTokens || []).filter(x => x !== r.t); DB.save(v); } }
 }
 async function tryRemembered(vid) {
-  const r = rememberedFor(vid), vil = VILLAGES.find(x => x.id === vid); if (!r || !vil || vil.removed) return false;
+  const r = rememberedFor(vid), vil = vilById(vid); if (!r || !vil || vil.removed) return false;
   try {
     const v = await DB.load(vid), u = v.users.find(x => x.id === r.u);
     if (!u || !u.active || v.status === 'suspended' || !(u.rememberTokens || []).includes(r.t)) { forgetRemember(vid, v); return false; }
@@ -1167,7 +1203,7 @@ async function doLogin(e) {
   if (Date.now() < fs.until) return err(CONTACT_MSG);
   const btn = $('#loginBtn'); btn.disabled = true; btn.textContent = 'Opening...';
   try {
-    const vil = VILLAGES.find(x => x.id === vid); if (!vil || vil.removed) throw new Error('This village or association is no longer on VillageVault. Contact your admin.');
+    const vil = vilById(vid); if (!vil || vil.removed) throw new Error('This village or association is no longer on VillageVault. Contact your admin.');
     const v = await DB.load(vid), u = v.users.find(x => x.id === uid), h = u ? await hashPw(vid, u.id, pw) : null;
     if (!u || u.hash !== h) {
       fs.n = (fs.n || 0) + 1;
@@ -1343,7 +1379,7 @@ async function doOwnerLogin(e) {
   } catch (ex) { err(ex.message || 'Could not sign in.'); } finally { btn.disabled = false; }
 }
 async function enterOwner(silent) {
-  await OWN.load(); await Promise.all(VILLAGES.map(v => DB.load(v.id)));
+  await OWN.load(); await Promise.all(allTenants().map(v => DB.load(v.id)));
   S.owner = true; S.v = null; S.u = null; S.page = 'o-overview'; S.f = {};
   $('#site').hidden = true; $('#ownerModal').hidden = true; $('#app').hidden = false; renderApp(); window.scrollTo(0, 0);
   if (!silent) toast('Owner console opened.', 'ok');
@@ -1482,6 +1518,7 @@ function seedSponsors() {
 /* Same rule as the database policy: only active, unexpired sponsors are readable */
 const spStatus = s => !s.is_active ? 'paused' : (new Date(s.expires_at) <= new Date() ? 'expired' : 'active');
 function sponsorsFor(villageId) {
+  villageId = baseId(villageId);
   const live = SPN.load().items.filter(s => spStatus(s) === 'active');
   return [1, 2, 3].map(slot => live.find(s => s.slot === slot && s.scope === 'global') || live.find(s => s.slot === slot && s.scope === 'village' && s.association_id === villageId) || null);
 }
@@ -1792,6 +1829,7 @@ Object.assign(API, {
   },
   saveBranding(d) {
     requireAdmin(); const ch = [];
+    if (S.v.wing) { d.name = ''; d.code = ''; }   // a wing's name and code follow its village
     if (d.name && d.name !== S.v.name) { ch.push(`Name: ${S.v.name} to ${d.name}`); S.v.name = d.name; const vil = VILLAGES.find(x => x.id === S.v.id); if (vil) vil.name = d.name; setPubName(S.v.id, d.name); }
     if (d.code && d.code !== S.v.code) {
       if (S.v.plan !== 'premium') throw new Error('Changing the village code is part of the Premium plan.');
@@ -1856,7 +1894,7 @@ ACTIONS['edit-accounts'] = function () {
 
 /* ---------- Village profile: logo, name, plan ---------- */
 ADMIN.profile = function () {
-  const prem = S.v.plan === 'premium', vil = VILLAGES.find(x => x.id === S.v.id);
+  const prem = S.v.plan === 'premium', vil = vilById(S.v.id);
   return `<section class="panel"><div class="panel-h"><div><h2>Village profile</h2><p>Your name and logo show on the sidebar${prem ? ' and on every receipt, report, statement, notice and export you issue' : ''}.</p></div><button class="btn btn-primary btn-sm" type="button" data-act="edit-profile">${prem ? 'Edit name, code and logo' : 'Edit name and logo'}</button></div>
     <div class="profile-row">${S.v.logo ? `<img class="plogo" src="${esc(S.v.logo)}" alt="Village logo">` : `<div class="plogo ph" style="background:${vil.color}">${esc(vil.code)}</div>`}
     <dl class="kv"><dt>Name</dt><dd>${esc(S.v.name)}</dd><dt>Code</dt><dd>${esc(S.v.code)}</dd><dt>Plan</dt><dd>${prem ? '<span class="badge b-admin">Premium</span>' : '<span class="badge b-off">Basic</span>'}</dd><dt>Documents</dt><dd>${prem ? 'Every receipt, report, statement, notice and export bears the village name, code and logo' : 'Carry the VillageVault name only'}</dd></dl></div>
@@ -1866,7 +1904,7 @@ ADMIN.profile = function () {
 ACTIONS['edit-profile'] = function () {
   requireAdmin();
   openModal({ title: S.v.plan === 'premium' ? 'Edit name, code and logo' : 'Edit name and logo', sub: 'Changes show to every member straight away.',
-    body: `<div class="field"><label for="vpN">Village or association name</label><input id="vpN" name="name" class="input" maxlength="40" value="${esc(S.v.name)}" required></div>${S.v.plan === 'premium' ? `<div class="field"><label for="vpC">Village code</label><input id="vpC" name="code" class="input mono" maxlength="5" value="${esc(S.v.code)}" style="text-transform:uppercase" required><span class="hint">2 to 5 letters or numbers. It appears on records, receipts and reports. Existing member IDs and login IDs do not change.</span></div><div class="field"><label for="vpA">Address on the letterhead (optional)</label><input id="vpA" name="address" class="input" maxlength="90" value="${esc((S.v.letter || {}).address || '')}"></div><div class="field"><label for="vpMo">Motto or tagline (optional)</label><input id="vpMo" name="motto" class="input" maxlength="70" value="${esc((S.v.letter || {}).motto || '')}"></div>` : ''}${fileField('Logo', 'logo')}${S.v.logo ? '<label class="check"><input type="checkbox" name="removeLogo"> <span>Remove the current logo</span></label>' : ''}`, submit: 'Save profile',
+    body: `<div class="field"><label for="vpN">Village or association name</label><input id="vpN" name="name" class="input" maxlength="40" value="${esc(S.v.name)}"${S.v.wing ? ' readonly' : ''} required></div>${S.v.plan === 'premium' ? `<div class="field"><label for="vpC">Village code</label><input id="vpC" name="code" class="input mono" maxlength="6" value="${esc(S.v.code)}"${S.v.wing ? ' readonly' : ''} style="text-transform:uppercase" required><span class="hint">2 to 5 letters or numbers. It appears on records, receipts and reports. Existing member IDs and login IDs do not change.</span></div><div class="field"><label for="vpA">Address on the letterhead (optional)</label><input id="vpA" name="address" class="input" maxlength="90" value="${esc((S.v.letter || {}).address || '')}"></div><div class="field"><label for="vpMo">Motto or tagline (optional)</label><input id="vpMo" name="motto" class="input" maxlength="70" value="${esc((S.v.letter || {}).motto || '')}"></div>` : ''}${fileField('Logo', 'logo')}${S.v.logo ? '<label class="check"><input type="checkbox" name="removeLogo"> <span>Remove the current logo</span></label>' : ''}`, submit: 'Save profile',
     onSubmit: async fd => {
       const n = (fd.get('name') || '').trim(); if (n.length < 2) throw new Error('Enter the village or association name.');
       const logo = await readLogo(fd.get('proof')); API.saveBranding({ name: n, code: fd.get('code') ? String(fd.get('code')).trim().toUpperCase() : '', logo, removeLogo: !!fd.get('removeLogo'), address: fd.get('address'), motto: fd.get('motto') }); fillVillageSelects(); renderApp(); closeModal(); toast('Profile saved.', 'ok');
@@ -1971,7 +2009,8 @@ ADMIN.outstanding = function () {
 };
 Object.assign(ACTIONS, {
   'notice-one'(el) { requireAdmin(); const yr = new Date().getFullYear(), it = itemFor(el.dataset.id, yr); if (!it.u) return; if (!(it.owe > 0)) return toast(`${it.u.name} owes nothing.`, 'ok'); download(`Notice-${it.u.id}.pdf`, noticePdf([it], yr)); API.logNotice([it.u.id], 'PDF downloaded'); toast('Notice downloaded. Send it to the member.', 'ok'); renderSoon(); },
-  'notice-all'() { requireAdmin(); const yr = new Date().getFullYear(), list = owingList(yr, S.f); if (!list.length) return toast('Nobody owes anything.', 'ok'); download(`Notices-${S.v.code}-${yr}.pdf`, noticePdf(list, yr)); API.logNotice(list.map(x => x.u.id), 'PDF downloaded'); toast(`${list.length} notices downloaded.`, 'ok'); renderSoon(); },
+  'notice-all'() { requireAdmin(); const yr = new Date().getFullYear(), list = owingList(yr, S.f); if (!list.length) return toast('Nobody owes anything.', 'ok'); const go = () => { try { download(`Notices-${S.v.code}-${yr}.pdf`, noticePdf(list, yr)); API.logNotice(list.map(x => x.u.id), 'PDF downloaded'); toast(`${list.length} notices downloaded.`, 'ok'); renderSoon(); } catch (e) { toast(e.message || 'Could not build the notices.', 'err'); } };
+    if (list.length > 25) { toast(`Preparing ${list.length} notices. This can take a few seconds.`, 'ok'); setTimeout(go, 80); } else go(); },
   'notice-wa'(el) { try { API.logNotice([el.dataset.id], 'WhatsApp reminder opened'); } catch (_) {} },
   'owing-csv'() { requireAdmin(); const yr = new Date().getFullYear(), rows = [['Member ID', 'Name', 'Family / Kindred', 'Phone', 'Owes', 'Total owed']]; owingList(yr, S.f).forEach(it => rows.push([it.u.id, it.u.name, kinOf(it.u), it.u.phone, it.rows.filter(r => r.owe > 0).map(r => `${r.L.name} ${r.owe}`).join('; '), it.owe])); csvDownload(`${S.v.code}-outstanding-${yr}.csv`, rows); }
 });
@@ -2031,12 +2070,13 @@ Object.assign(ACTIONS, {
 /* =========================================================
    ROUND 4: attendance register, access requests, login details
    ========================================================= */
+const meetingSeen = m => !m.exec || isAdmin();   // executive meetings belong to admins only
 const meetingOpen = m => m.status === 'open' && m.date === today();
 const getMtg = id => { const m = S.v.meetings.find(x => x.id === id); if (!m) throw new Error('Meeting not found.'); return m; };
 const attBadge = s => ({ verified: '<span class="badge b-verified">Present</span>', pending: '<span class="badge b-pending">Waiting for admin</span>', rejected: '<span class="badge b-rejected">Not accepted</span>', absent: '<span class="badge b-off">Absent</span>', open: '<span class="badge b-pending">Register open</span>' })[s] || '';
 const meetingsDesc = () => S.v.meetings.slice().sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
 function attendanceOf(id) {
-  const rows = meetingsDesc().map(m => { const k = m.marks.find(x => x.memberId === id); return { m, k, state: k ? k.status : (meetingOpen(m) ? 'open' : 'absent') }; });
+  const rows = meetingsDesc().filter(meetingSeen).map(m => { const k = m.marks.find(x => x.memberId === id); return { m, k, state: k ? k.status : (meetingOpen(m) ? 'open' : 'absent') }; });
   const counted = rows.filter(r => !meetingOpen(r.m));
   return { rows, total: counted.length, present: counted.filter(r => r.state === 'verified').length };
 }
@@ -2056,7 +2096,7 @@ Object.assign(API, {
   },
   markAttendance() {
     if (!S.u || S.u.id === 'SUPPORT' || S.owner || !['member', 'admin'].includes(S.u.role) || !S.u.active) throw new Error('Only members and admins can mark their own attendance.'); requireWritable();
-    const m = S.v.meetings.find(meetingOpen); if (!m) throw new Error('No register is open right now. Your admin opens it on meeting days only.');
+    const m = S.v.meetings.find(meetingOpen); if (!m || !meetingSeen(m)) throw new Error('No register is open right now. Your admin opens it on meeting days only.');
     if (m.marks.some(k => k.memberId === S.u.id)) throw new Error('You have already marked attendance for this meeting.');
     m.marks.push({ memberId: S.u.id, at: stamp(), status: 'pending' }); commit(); return m;
   },
@@ -2088,7 +2128,7 @@ Object.assign(API, {
 
 /* ----- Member side ----- */
 function attendanceMember() {
-  const open = S.v.meetings.find(meetingOpen), att = attendanceOf(S.u.id), mine = open && open.marks.find(k => k.memberId === S.u.id), latest = meetingsDesc()[0];
+  const open = S.v.meetings.find(m => meetingOpen(m) && meetingSeen(m)), att = attendanceOf(S.u.id), mine = open && open.marks.find(k => k.memberId === S.u.id), latest = meetingsDesc().filter(meetingSeen)[0];
   const top = open ? (mine
     ? `<div class="callout ok"><div><b>You marked attendance for ${esc(open.title)}</b><p>${mine.status === 'verified' ? 'Your admin has verified it.' : 'Waiting for your admin to verify it.'}</p></div></div>`
     : `<div class="callout"><div><b>The register is open: ${esc(open.title)}</b><p>Mark yourself present now. Your admin will verify it. It closes tonight.</p></div><button class="btn btn-primary" type="button" data-act="att-mark">Mark me present</button></div>`)
@@ -2110,7 +2150,7 @@ Object.assign(ACTIONS, {
   'att-mark-admin'(el) { requireAdmin(); API.markAttendance(); toast('Marked. Another admin must verify your attendance.', 'ok'); if ($('#modalRoot').hidden) renderView(); else { mtgView(el.dataset.id); renderSoon(); } },
   'att-mark'() { API.markAttendance(); toast('Attendance marked. Your admin will verify it.', 'ok'); renderView(); },
   'view-register'(el) {
-    const m = S.v.meetings.find(x => x.id === el.dataset.id); if (!m) return;
+    const m = S.v.meetings.find(x => x.id === el.dataset.id); if (!m || !meetingSeen(m)) return;
     const here = m.marks.filter(k => k.status === 'verified').map(k => nameOf(k.memberId)).sort(), active = S.v.users.filter(u => (u.role === 'member' || u.role === 'admin') && u.active).length;
     infoModal(m.title, `${esc(fmtDate(m.date))}. ${here.length} verified present of ${active} members.${meetingOpen(m) ? ' The register is open today.' : ''}`, here.length ? `<div class="namegrid">${here.map(n => `<span>${esc(n)}</span>`).join('')}</div>` : '<div class="empty"><b>Nobody verified yet</b></div>', 'modal-md');
   }
@@ -2212,7 +2252,7 @@ Object.assign(ACTIONS, {
 
 /* ----- First-time members: request login details from the sign-in page ----- */
 async function submitAccessRequest(vid, d) {
-  const vil = VILLAGES.find(x => x.id === vid); if (!vil || vil.removed) throw new Error('This village or association is not available.');
+  const vil = vilById(vid); if (!vil || vil.removed) throw new Error('This village or association is not available.');
   const v = await DB.load(vid); if (v.status === 'suspended') throw new Error('Access is paused for this village or association. Contact VillageVault support.');
   if (v.requests.some(r => r.status === 'new' && waNum(r.phone) === waNum(d.phone))) throw new Error('You already asked. Your admin will contact you on that phone number.');
   v.seq.req = (v.seq.req || 0) + 1; v.requests.push({ id: `${v.code}-R${String(v.seq.req).padStart(3, '0')}`, name: d.name, phone: d.phone, family: d.family || '', kindred: d.kindred || '', note: d.note, at: stamp(), status: 'new' });
@@ -2220,7 +2260,7 @@ async function submitAccessRequest(vid, d) {
 }
 ACTIONS['request-access'] = function () {
   const vid = $('#heroVillage') && $('#heroVillage').value; if (!vid) return toast('Choose your village or association first.', 'err');
-  const vil = VILLAGES.find(x => x.id === vid);
+  const vil = vilById(vid);
   openModal({ title: 'Request your login details', sub: `${esc(vil.name)}. Your admin will check your name on the village register, then send you your own login details.`,
     body: `<div class="field"><label for="rqN">Your full name, as on the register</label><input id="rqN" name="name" class="input" maxlength="80" required></div><div class="form-row"><div class="field"><label for="rqP">Phone number</label><input id="rqP" name="phone" class="input" type="tel" maxlength="20" placeholder="0803 123 4567" required></div></div>${vil.type !== 'association' ? '<div class="form-row"><div class="field"><label for="rqF">Family name</label><input id="rqF" name="family" class="input" maxlength="40" required></div><div class="field"><label for="rqK">Kindred name</label><input id="rqK" name="kindred" class="input" maxlength="40" required></div></div>' : ''}<div class="field"><label for="rqM">Message to the admin</label><textarea id="rqM" name="note" class="textarea" maxlength="200" required placeholder="${vil.type !== 'association' ? 'For example: I live abroad and joined in 2019' : 'For example: I joined in 2019 and my membership number is 123'}"></textarea></div>`, submit: 'Send request',
     onSubmit: async fd => {
@@ -2542,12 +2582,12 @@ Object.assign(OWNER_API, {
 });
 const OADM = v => v.users.filter(u => u.role === 'admin').sort((a, b) => (b.lead ? 1 : 0) - (a.lead ? 1 : 0) || a.id.localeCompare(b.id));
 OWNERV['o-admins'] = function () {
-  const f = S.f, vid = VILLAGES.some(x => x.id === f.village) ? f.village : VILLAGES[0].id, v = DB.cache[vid], admins = OADM(v), lead = admins.find(u => u.lead), roles = getRoles();
+  const f = S.f, vid = tenantList().some(x => x.id === f.village) ? f.village : VILLAGES[0].id, v = DB.cache[vid], admins = OADM(v), lead = admins.find(u => u.lead), roles = getRoles();
   const held = r => Object.values(DB.cache).reduce((a, x) => a + x.users.filter(u => u.role === 'admin' && u.title === r).length, 0);
   return `<section class="panel"><div class="panel-h"><div><h2>Admins of a village</h2><p>Create, appoint and remove admins in any village or association. Each role can be held by one person per village.</p></div><div class="btn-row"><button class="btn btn-ghost btn-sm" type="button" data-act="o-appoint" data-id="${esc(vid)}">Appoint a member</button><button class="btn btn-primary btn-sm" type="button" data-act="o-add-admin" data-id="${esc(vid)}">Add new admin</button></div></div>
-    <div class="toolbar"><div class="field"><label for="oaV">Village or association</label><select id="oaV" class="select" data-filter="village">${VILLAGES.filter(x => !x.removed).map(x => opt(x.id, `${x.name} (${x.code})`, vid)).join('')}</select></div></div>
+    <div class="toolbar"><div class="field"><label for="oaV">Village or association</label><select id="oaV" class="select" data-filter="village">${tenantList().map(x => opt(x.id, `${x.wing ? '\u00A0\u00A0\u21B3 ' : ''}${x.name} (${x.code})`, vid)).join('')}</select></div></div>
     <div class="callout${lead ? ' ok' : ''}"><div><b>Lead Admin: ${lead ? esc(lead.name) + ' (' + esc(lead.id) + ')' : 'none assigned'}</b><p>The Lead Admin appoints admins and assigns their duties inside the village. Only you can change who it is.</p></div><div class="btn-row"><button class="btn btn-primary btn-sm" type="button" data-act="o-lead" data-v="${esc(vid)}">${lead ? 'Change Lead Admin' : 'Assign Lead Admin'}</button>${lead ? `<button class="btn btn-ghost btn-sm" type="button" data-act="o-unlead" data-v="${esc(vid)}">Remove Lead Admin</button>` : ''}</div></div>
-    ${table(['Admin', 'Role', 'Phone', 'Account', ''], admins.map(a => [`${esc(a.name)}<small>${esc(a.id)}${a.lead ? ' · Lead Admin' : ''}</small>`, esc(a.title || '-'), esc(a.phone || '-'), a.active ? '<span class="badge b-active">Active</span>' : '<span class="badge b-off">Deactivated</span>', `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="o-edit-admin" data-v="${esc(vid)}" data-id="${esc(a.id)}">Edit</button><button class="btn btn-ghost btn-sm" type="button" data-act="o-reset-admin" data-v="${esc(vid)}" data-id="${esc(a.id)}">Reset password</button>${a.lead ? '' : `<button class="btn btn-ghost btn-sm" type="button" data-act="o-lead" data-v="${esc(vid)}" data-id="${esc(a.id)}">Make Lead</button>`}<button class="btn btn-ghost btn-sm" type="button" data-act="o-remove-admin" data-v="${esc(vid)}" data-id="${esc(a.id)}">Remove</button></div>`]), ['This village has no admins', 'Add one so the village can verify payments.'])}</section>
+    ${table(['Admin', 'Role', 'Phone', 'Account', ''], admins.map(a => [`${esc(a.name)}<small>${esc(a.id)}${a.lead ? ' · Lead Admin' : ''}</small>`, esc(a.title || '-'), esc(a.phone || '-'), a.active ? '<span class="badge b-active">Active</span>' : '<span class="badge b-off">Deactivated</span>', `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="o-edit-admin" data-v="${esc(vid)}" data-id="${esc(a.id)}">Edit</button><button class="btn btn-ghost btn-sm" type="button" data-act="o-reset-admin" data-v="${esc(vid)}" data-id="${esc(a.id)}">Reset password</button>${a.lead ? '' : `<button class="btn btn-ghost btn-sm" type="button" data-act="o-lead" data-v="${esc(vid)}" data-id="${esc(a.id)}">Make Lead</button>`}${a.totp ? `<button class="btn btn-ghost btn-sm" type="button" data-act="o-reset-2fa" data-v="${esc(vid)}" data-id="${esc(a.id)}">Reset 2-step</button>` : ''}<button class="btn btn-ghost btn-sm" type="button" data-act="o-remove-admin" data-v="${esc(vid)}" data-id="${esc(a.id)}">Remove</button></div>`]), ['This village has no admins', 'Add one so the village can verify payments.'])}</section>
   <section class="panel"><div class="panel-h"><div><h2>Admin roles</h2><p>Only you can create or remove roles. They apply to every village and association.</p></div><button class="btn btn-primary btn-sm" type="button" data-act="o-add-role">Create a role</button></div>
     ${table(['Role', { t: 'Held by', num: true }, ''], roles.map(r => [esc(r), `${held(r)} admin${held(r) === 1 ? '' : 's'}`, `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="o-remove-role" data-name="${esc(r)}">Remove</button></div>`]), ['No roles', ''])}</section>`;
 };
@@ -2643,7 +2683,7 @@ Object.assign(API, {
   },
   saveSignatory(adminId, d) {
     requireAdmin(); requireWritable(); const u = userById(adminId);
-    if (!u || u.role !== 'admin' || !['Chairman', 'Financial Secretary'].includes(u.title)) throw new Error('Only the Chairman and the Financial Secretary sign receipts.');
+    if (!u || u.role !== 'admin' || !['Chairman', 'Financial Secretary', 'Secretary'].includes(u.title)) throw new Error('Only the Chairman, the Financial Secretary and the Secretary have signatures.');
     if (!(S.u.id === adminId || isLeadAdmin())) throw new Error('Only that admin or the Lead Admin can change this.');
     const ph = (d.phone || '').trim(); if (ph && !/^[0-9+\s-]{10,16}$/.test(ph)) throw new Error('Enter a valid phone number.');
     const ch = []; if (ph !== (u.phone || '')) { ch.push('Phone updated'); u.phone = ph; }
@@ -2767,7 +2807,7 @@ function receiptsPanel() {
 /* ---------- Letterhead signatories (Village profile) ---------- */
 const _profile = ADMIN.profile;
 ADMIN.profile = function () {
-  const prem = S.v.plan === 'premium', roles = ['Chairman', 'Financial Secretary'];
+  const prem = S.v.plan === 'premium', roles = ['Chairman', 'Financial Secretary', 'Secretary'];
   const rows = roles.map(role => { const u = holderOf(role), can = u && (S.u.id === u.id || isLeadAdmin());
     return [esc(role), u ? esc(u.name) : '<span class="muted">Nobody holds this duty yet</span>', u ? esc(u.phone || 'Not added') : '-', u && u.signature ? `<img class="sigprev" src="${esc(u.signature)}" alt="Signature of ${esc(u.name)}">` : '<span class="muted">No signature</span>', can ? `<button class="btn btn-ghost btn-sm" type="button" data-act="edit-signatory" data-id="${esc(u.id)}">Edit</button>` : '']; });
   return _profile() + `<section class="panel"><div class="panel-h"><div><h2>Letterhead signatories</h2><p>${prem ? 'Premium receipts are issued on a letterhead. The Chairman and the Financial Secretary appear in the footer with their phone and signature.' : 'Premium receipts are issued on a letterhead signed by the Chairman and the Financial Secretary. ' + premiumBadge}</p></div></div>${table(['Duty', 'Name', 'Phone', 'Signature', ''], rows, ['', ''])}</section>`;
@@ -2836,14 +2876,14 @@ function achievementsView() {
   const u = S.u, list = achievementsOf(u), got = list.filter(b => b.got), pts = got.reduce((a, b) => a + b.pts, 0), lvl = pts >= 120 ? 'Gold' : pts >= 70 ? 'Silver' : pts >= 30 ? 'Bronze' : 'Starter', next = pts >= 120 ? 0 : pts >= 70 ? 120 : pts >= 30 ? 70 : 30;
   return `<div class="kpis kpis-3">${kpi('Achievements earned', `${got.length} of ${list.length}`, 'Keep going', 'hot')}${kpi('Points', String(pts), next ? `${next - pts} more for the next level` : 'Top level reached', 'good')}${kpi('Level', lvl, `As a member of ${esc(S.v.name)}`)}</div>
   <section class="panel"><div class="panel-h"><div><h2>My achievements</h2><p>Earned from your payments, attendance and years of service. The same badges apply in every village and association.</p></div></div>
-  <div class="medals">${list.map(b => `<div class="medal-card${b.got ? ' got' : ''}"><div class="medal">${b.sym}</div><div class="mc-body"><b>${esc(b.name)}</b><small>${esc(b.desc)}</small>${b.got ? `<span class="badge b-verified">Earned · ${b.pts} pts</span>` : `<div class="bar"><i style="width:${Math.round(b.val / b.max * 100)}%"></i></div><small>${b.id === 'gen' ? money(b.val) + ' of ' + money(b.max) : b.id === 'present' ? b.val + '% of 80%' : b.val + ' of ' + b.max}</small>`}</div></div>`).join('')}</div></section>`;
+  <div class="medals">${list.map(b => `<div class="medal-card${b.got ? ' got' : ''}"><div class="medal" aria-hidden="true">${b.sym}</div><div class="mc-body"><b>${esc(b.name)}</b><small>${esc(b.desc)}</small>${b.got ? `<span class="badge b-verified">Earned · ${b.pts} pts</span>` : `<div class="bar"><i style="width:${Math.round(b.val / b.max * 100)}%"></i></div><small>${b.id === 'gen' ? money(b.val) + ' of ' + money(b.max) : b.id === 'present' ? b.val + '% of 80%' : b.val + ' of ' + b.max}</small>`}</div></div>`).join('')}</div></section>`;
 }
 VIEWS.member.achievements = achievementsView; VIEWS.admin.achievements = achievementsView;
 
 /* ---------- Sponsors hall of fame ---------- */
 function hallView() {
   const d = SPN.load(), wk = id => d.payments.filter(p => p.sponsor_id === id).reduce((a, p) => a + (Number(p.weeks) || 0), 0);
-  const items = d.items.filter(s => s.scope === 'global' || s.association_id === S.v.id).map(s => ({ s, weeks: wk(s.id), st: spStatus(s) })).sort((a, b) => b.weeks - a.weeks || a.s.shop_name.localeCompare(b.s.shop_name));
+  const items = d.items.filter(s => s.scope === 'global' || s.association_id === baseId(S.v.id)).map(s => ({ s, weeks: wk(s.id), st: spStatus(s) })).sort((a, b) => b.weeks - a.weeks || a.s.shop_name.localeCompare(b.s.shop_name));
   const tier = w => w >= 16 ? ['Platinum', '#7C3AED'] : w >= 8 ? ['Gold', '#D99A18'] : w >= 4 ? ['Silver', '#6B7280'] : ['Bronze', '#B45309'];
   return `<section class="panel"><div class="panel-h"><div><h2>Sponsors hall of fame</h2><p>Local businesses that keep this community running. The longer they support us, the higher their tier. Please thank them with your custom.</p></div></div>
   ${items.length ? `<div class="hall">${items.map((x, i) => { const t = tier(x.weeks); return `<div class="hall-card"><div class="hall-rank">${i + 1}</div><img class="sp-logo" src="${esc(x.s.logo)}" alt="${esc(x.s.shop_name)} logo"><div class="hall-body"><b>${esc(x.s.shop_name)}</b><span class="tier" style="--tc:${t[1]}">${t[0]}</span><small>${x.weeks} week${x.weeks === 1 ? '' : 's'} of support, since ${esc(fmtDate(String(x.s.started_at).slice(0, 10)))}</small><small>${x.s.scope === 'global' ? 'Lagos-wide sponsor' : 'Sponsor of this community'} · ${x.st === 'active' ? '<span class="badge b-verified">Featured now</span>' : '<span class="badge b-off">Past sponsor</span>'}</small>${x.st === 'active' ? `<a class="btn btn-leaf btn-sm" href="${esc(waLink(x.s))}" target="_blank" rel="noopener noreferrer">Chat on WhatsApp</a>` : ''}</div></div>`; }).join('')}</div>` : '<div class="empty"><b>No sponsors yet</b>Sponsors will be honoured here.</div>'}</section>`;
@@ -2863,11 +2903,11 @@ function maybeRate(trigger, tries) {
 }
 function openRate(trigger) {
   openModal({ title: 'How are we doing?', sub: `You just finished ${esc(trigger)}. Rate VillageVault so we can keep improving it.`,
-    body: `<div class="stars" role="radiogroup" aria-label="Rating">${[1, 2, 3, 4, 5].map(n => `<button type="button" class="star" data-act="rate-star" data-v="${n}" aria-label="${n} star${n > 1 ? 's' : ''}">★</button>`).join('')}</div><input type="hidden" name="stars" id="rvStars" value="">
+    body: `<div class="stars" role="radiogroup" aria-label="Rating">${[1, 2, 3, 4, 5].map(n => `<button type="button" class="star" role="radio" aria-checked="false" data-act="rate-star" data-v="${n}" aria-label="${n} star${n > 1 ? 's' : ''}">★</button>`).join('')}</div><input type="hidden" name="stars" id="rvStars" value="">
     <div class="field"><label for="rvC">Tell us more (optional)</label><textarea id="rvC" name="comment" class="textarea" maxlength="300" placeholder="What worked well? What should be better?"></textarea></div>`, submit: 'Send rating',
     onSubmit: fd => { const n = Number(fd.get('stars')); if (!(n >= 1 && n <= 5)) throw new Error('Tap a star to rate.'); const l = RV.load(); l.push({ id: 'RV' + (l.length + 1), ts: stamp(), village: S.v.name, villageId: S.v.id, role: S.u.role, name: S.u.name, stars: n, comment: (fd.get('comment') || '').trim(), trigger }); RV.save(l); lsSet(`vv_rate_${S.v.id}_${S.u.id}`, String(Date.now())); closeModal(); toast('Thank you for your rating.', 'ok'); } });
 }
-Object.assign(ACTIONS, { 'rate-star'(el) { const n = Number(el.dataset.v); $('#rvStars').value = String(n); $$('.star').forEach((b, i) => b.classList.toggle('on', i < n)); } });
+Object.assign(ACTIONS, { 'rate-star'(el) { const n = Number(el.dataset.v); $('#rvStars').value = String(n); $$('.star').forEach((b, i) => { b.classList.toggle('on', i < n); b.setAttribute('aria-checked', String(i + 1 === n)); }); } });
 const _toastRaw = toast;
 toast = function (msg, kind) {
   _toastRaw(msg, kind);
@@ -2881,6 +2921,717 @@ OWNERV['o-reviews'] = function () {
   <section class="panel"><div class="panel-h"><div><h2>Reviews from members and admins</h2><p>Only you can see these. Villages never see ratings.</p></div></div>
   ${table(['When', 'Village', 'From', { t: 'Rating', num: true }, 'Comment', 'After'], l.map(r => [`<span class="nowrap">${esc(fmtTS(r.ts))}</span>`, esc(r.village), `${esc(r.name)}<small>${esc(r.role)}</small>`, `<span class="rstars">${'★'.repeat(r.stars)}${'☆'.repeat(5 - r.stars)}</span>`, esc(r.comment || '-'), esc(r.trigger)]), ['No ratings yet', 'Ratings appear here after members and admins finish tasks.'])}</section>`;
 };
+/* =========================================================
+   ROUND 9 / #4: one place for plan rules.
+   Every Premium-only action asks assertFeature(). The owner's plan
+   registry is the source of truth: a village record that was edited
+   by hand is put back to the registry value when it loads.
+   NOTE: this stops casual tampering only. Real enforcement needs a server.
+   ========================================================= */
+const PLAN_RULES = {
+  basic:   { memberCap: MEMBER_CAP, letterhead: false, watermark: true,  broadcast: false, codeEdit: false, autoBackup: false, minutes: false },
+  premium: { memberCap: Infinity,   letterhead: true,  watermark: false, broadcast: true,  codeEdit: true,  autoBackup: true, minutes: true }
+};
+const planKey = v => ((v || S.v || {}).plan === 'premium' ? 'premium' : 'basic');
+const planAllows = (f, v) => !!PLAN_RULES[planKey(v)][f];
+function assertFeature(f, label) { if (!planAllows(f)) throw new Error(`${label} is part of the Premium plan.`); }
+const PLAN_REG = { load() { try { return JSON.parse(lsGet('vv_plans_v1') || '{}'); } catch (_) { return {}; } }, save(r) { lsSet('vv_plans_v1', JSON.stringify(r)); } };
+function enforcePlanRegistry(v) {
+  const r = PLAN_REG.load();
+  if (!r[v.id]) { r[v.id] = v.plan; PLAN_REG.save(r); return; }
+  if (r[v.id] !== v.plan) { v.plan = r[v.id]; v.planRestored = stamp(); }
+}
+const setRegistryPlan = (id, plan) => { const r = PLAN_REG.load(); r[id] = plan; ['men', 'women'].forEach(k => { const wid = `${id}~${k}`; r[wid] = plan; const w = DB.cache[wid]; if (w) { w.plan = plan; DB.save(w); } }); PLAN_REG.save(r); };   // wings share their village's plan
+
+(function wrapPlanApis() {
+  const em = API.editMember;
+  API.editMember = function (id, d) {
+    const u = userById(id);
+    if (u && u.role === 'member' && !u.active && d.active === 'yes' && capReached()) throw new Error(`The Basic plan covers up to ${MEMBER_CAP} active members. Upgrade to Premium to switch this member back on.`);
+    return em.call(API, id, d);
+  };
+  const sb = API.saveBranding;
+  if (sb) API.saveBranding = function (d) {
+    if (d && d.code !== undefined && String(d.code).trim().toUpperCase() !== S.v.code) assertFeature('codeEdit', 'Changing the village code');
+    return sb.call(API, d);
+  };
+  const mv = OWNER_API.manageVillage;
+  OWNER_API.manageVillage = function (id, d) { const r = mv.call(OWNER_API, id, d); if (DB.cache[id]) setRegistryPlan(id, DB.cache[id].plan); return r; };
+  const av = OWNER_API.addVillage;
+  OWNER_API.addVillage = async function (d) { const r = await av.call(OWNER_API, d); if (DB.cache[r.id]) setRegistryPlan(r.id, DB.cache[r.id].plan); return r; };
+  const dv = OWNER_API.deleteVillage;
+  if (dv) OWNER_API.deleteVillage = function (id) { const r = dv.apply(OWNER_API, arguments); const g = PLAN_REG.load(); delete g[id]; PLAN_REG.save(g); return r; };
+})();
+/* =========================================================
+   ROUND 9 / #7: backup, restore and export
+   Lead Admin (and the owner): download or restore a village's full records.
+   Premium: automatic rolling snapshots kept in the browser (last 3, compressed).
+   Owner: one file with every village.
+   ========================================================= */
+const BACKUP_KIND = 'villagevault-backup', BACKUP_VER = 1, BACKUP_STALE_DAYS = 7;
+const stripProofs = v => { const c = JSON.parse(JSON.stringify(v)); (c.tx || []).forEach(t => { if (t.proof) { t.proof = null; t.proofStripped = true; } }); (c.expenses || []).forEach(e => { if (e.proof) { e.proof = null; e.proofStripped = true; } }); return c; };
+function villageBackup(v, withProofs) { return { kind: BACKUP_KIND, version: BACKUP_VER, exportedAt: stamp(), exportedBy: S.owner ? 'VillageVault support' : (S.u ? S.u.name : ''), withProofs: !!withProofs, village: withProofs ? JSON.parse(JSON.stringify(v)) : stripProofs(v) }; }
+const backupSummary = b => { const v = b.village || {}; return { name: v.name, id: v.id, members: (v.users || []).filter(u => u.role === 'member').length, admins: (v.users || []).filter(u => u.role === 'admin').length, tx: (v.tx || []).length, expenses: (v.expenses || []).length, audit: (v.audit || []).length }; };
+function checkBackup(b) {
+  if (!b || b.kind !== BACKUP_KIND) throw new Error('That is not a VillageVault backup file.');
+  if (b.version > BACKUP_VER) throw new Error('That backup was made by a newer version of VillageVault.');
+  const v = b.village; if (!v || typeof v !== 'object' || !Array.isArray(v.users) || !Array.isArray(v.tx) || !Array.isArray(v.audit)) throw new Error('The backup file is damaged or incomplete.');
+  if (v.id !== S.v.id) throw new Error(`This backup belongs to ${v.name || 'another village'}. It cannot be restored into ${S.v.name}.`);
+  if (!v.users.some(u => u.role === 'admin' && u.active !== false)) throw new Error('The backup has no active admin. It was not accepted.');
+  return v;
+}
+async function gz(text) { const cs = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip')), buf = new Uint8Array(await new Response(cs).arrayBuffer()); let s = ''; for (let i = 0; i < buf.length; i += 8192) s += String.fromCharCode.apply(null, buf.subarray(i, i + 8192)); return btoa(s); }
+async function ungz(b64) { const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return new Response(new Blob([u]).stream().pipeThrough(new DecompressionStream('gzip'))).text(); }
+const SNAP = { key: id => 'vv_snap_' + id, load(id) { try { return JSON.parse(lsGet(this.key(id)) || '[]'); } catch (_) { return []; } }, save(id, l) { return lsSet(this.key(id), JSON.stringify(l)); } };
+async function takeSnapshot(why) {
+  if (typeof CompressionStream === 'undefined') return false;
+  const v = S.v, list = SNAP.load(v.id), data = await gz(JSON.stringify(villageBackup(v, false)));
+  list.unshift({ at: stamp(), why, kb: Math.round(data.length / 1024), data }); while (list.length > 3) list.pop();
+  while (list.length && !SNAP.save(v.id, list)) list.pop(); return true;
+}
+const daysSince = iso => iso ? (Date.now() - new Date(iso).getTime()) / 864e5 : Infinity;
+
+/* ---- API ---- */
+Object.assign(API, {
+  noteBackup(kind, withProofs) { requireLead(); S.v.lastBackupAt = stamp(); S.v.lastBackupBy = S.owner ? 'VillageVault support' : S.u.name; log('Downloaded backup', S.v.code, `${kind}${withProofs ? ' with proof images' : ' without proof images'}`); commit(); },
+  async restoreBackup(b) {
+    requireLead(); requireWritable(); const nv = checkBackup(b);
+    await takeSnapshot('Before restore');
+    const keep = { plan: S.v.plan, status: S.v.status, code: S.v.code, name: S.v.name, logo: S.v.logo, type: S.v.type }, old = S.v, oldProofs = new Map(old.tx.filter(t => t.proof).map(t => [t.id, t.proof])), oldExp = new Map((old.expenses || []).filter(e => e.proof).map(e => [e.id, e.proof]));
+    const data = JSON.parse(JSON.stringify(nv)); Object.assign(data, keep); migrate(data);
+    data.tx.forEach(t => { if (!t.proof && oldProofs.has(t.id)) t.proof = oldProofs.get(t.id); delete t.proofStripped; }); (data.expenses || []).forEach(e => { if (!e.proof && oldExp.has(e.id)) e.proof = oldExp.get(e.id); delete e.proofStripped; });
+    Object.keys(old).forEach(k => delete old[k]); Object.assign(old, data); REV++;
+    if (!S.owner) { const me = old.users.find(u => u.id === S.u.id && u.active !== false); if (!me) { commit(); return { logout: true }; } S.u = me; }
+    log('Restored backup', S.v.code, `Records restored from a backup made ${fmtTS(b.exportedAt)}`); old.lastBackupAt = old.lastBackupAt || stamp(); commit(); return {};
+  },
+  async restoreSnapshot(i) {
+    requireLead(); requireWritable(); const s = SNAP.load(S.v.id)[i]; if (!s) throw new Error('That snapshot is no longer there.');
+    return this.restoreBackup(JSON.parse(await ungz(s.data)));
+  }
+});
+
+/* ---- village panel (Village profile page) ---- */
+function backupPanel() {
+  if (!S.u || !isLeadAdmin()) return '';
+  const v = S.v, last = v.lastBackupAt, stale = daysSince(last) > BACKUP_STALE_DAYS, prem = planAllows('autoBackup'), snaps = SNAP.load(v.id);
+  return `<section class="panel" id="backup"><div class="panel-h"><div><h2>Backup and restore</h2><p>Your records live in this browser. Keep a copy somewhere safe. ${last ? `Last backup: <b>${esc(fmtTS(last))}</b> by ${esc(v.lastBackupBy || 'an admin')}.` : '<b>No backup has been made yet.</b>'}</p></div>${stale ? '<span class="badge b-pending">Backup due</span>' : '<span class="badge b-active">Up to date</span>'}</div>
+  <div class="btn-row"><button class="btn btn-primary" type="button" data-act="backup-dl" data-p="0">Download backup</button><button class="btn btn-ghost" type="button" data-act="backup-dl" data-p="1">Download with proof images</button><button class="btn btn-ghost" type="button" data-act="backup-restore">Restore from a file</button></div>
+  <p class="hint" style="margin-top:10px">The file holds members, payments, expenses, attendance and the activity log. Treat it as confidential. Login passwords are stored only as scrambled hashes.</p>
+  <div class="sec-title">Automatic snapshots</div>
+  ${prem ? `<p class="hint">Premium keeps the last 3 snapshots in this browser and refreshes them once a day when the Lead Admin signs in.</p>${snaps.length ? table(['Taken', 'Reason', { t: 'Size', num: true }, ''], snaps.map((s, i) => [esc(fmtTS(s.at)), esc(s.why || 'Daily'), s.kb + ' KB', `<button class="btn btn-ghost btn-sm" type="button" data-act="snap-restore" data-i="${i}">Restore</button>`]), ['', '']) : '<div class="empty"><b>No snapshots yet</b>The first one is taken the next time the Lead Admin signs in.</div>'}` : `<p class="hint">${premiumBadge} Automatic daily snapshots are part of the Premium plan. Manual backups work on every plan.</p>`}</section>`;
+}
+{ const _p = ADMIN.profile; ADMIN.profile = function () { return _p() + backupPanel(); }; VIEWS.admin.profile = ADMIN.profile; }
+{ const _o = ADMIN.overview; ADMIN.overview = function () {
+  const html = _o();
+  if (S.owner || !isLeadAdmin() || !(daysSince(S.v.lastBackupAt) > BACKUP_STALE_DAYS)) return html;
+  return `<div class="callout upgrade"><div><b>Back up your records</b><p>${S.v.lastBackupAt ? 'Your last backup was ' + Math.floor(daysSince(S.v.lastBackupAt)) + ' days ago.' : 'You have not made a backup yet.'} It takes one click and protects you if this browser is cleared.</p></div><button class="btn btn-primary btn-sm" type="button" data-act="goto" data-page="profile">Back up now</button></div>` + html;
+}; VIEWS.admin.overview = ADMIN.overview; }
+
+Object.assign(ACTIONS, {
+  'backup-dl'(el) {
+    try { const withP = el.dataset.p === '1'; const b = villageBackup(S.v, withP); download(`VillageVault-${S.v.code}-backup-${today()}.json`, new Blob([JSON.stringify(b)], { type: 'application/json' })); API.noteBackup('Full backup', withP); toast('Backup downloaded. Keep it somewhere safe.', 'ok'); renderSoon(); } catch (e) { toast(e.message, 'err'); }
+  },
+  'backup-restore'() {
+    openModal({ title: 'Restore from a backup file', sub: `This replaces the records of ${esc(S.v.name)} with the contents of the file. A snapshot of the current records is kept first.`,
+      body: `<div class="field"><label for="bkF">Backup file (.json)</label><input id="bkF" class="input" type="file" name="backup" accept=".json,application/json"></div>
+      <div class="field"><label for="bkC">Type RESTORE to confirm</label><input id="bkC" name="confirm" class="input" autocomplete="off" placeholder="RESTORE"></div>`, submit: 'Restore records', danger: true,
+      onSubmit: async fd => {
+        const f = fd.get('backup'); if (!f || !f.size) throw new Error('Choose a backup file.'); if (f.size > 40e6) throw new Error('That file is too large.');
+        if (String(fd.get('confirm') || '').trim() !== 'RESTORE') throw new Error('Type RESTORE in capital letters to confirm.');
+        let b; try { b = JSON.parse(await f.text()); } catch (_) { throw new Error('That file could not be read. It is not a valid backup.'); }
+        const sm = backupSummary(b), r = await API.restoreBackup(b); closeModal();
+        if (r.logout) { toast('Restored. Please sign in again.', 'ok'); return ACTIONS.logout(); }
+        toast(`Restored ${sm.members} members and ${sm.tx} payments.`, 'ok'); renderView();
+      } });
+  },
+  'snap-restore'(el) {
+    const i = Number(el.dataset.i), s = SNAP.load(S.v.id)[i]; if (!s) return toast('That snapshot is no longer there.', 'err');
+    openModal({ title: 'Restore this snapshot?', sub: `Taken ${esc(fmtTS(s.at))}. Records changed since then will be replaced. The current records are snapshotted first.`, body: '', submit: 'Restore', danger: true,
+      onSubmit: async () => { const r = await API.restoreSnapshot(i); closeModal(); if (r.logout) { toast('Restored. Please sign in again.', 'ok'); return ACTIONS.logout(); } toast('Snapshot restored.', 'ok'); renderView(); } });
+  }
+});
+
+/* ---- daily automatic snapshot for Premium villages ---- */
+{ const _rv = renderView; renderView = function () {
+  _rv.apply(this, arguments);
+  try { if (!S.owner && S.u && isLeadAdmin() && planAllows('autoBackup') && !S.snapChecked) { S.snapChecked = true; const l = SNAP.load(S.v.id); if (daysSince(l[0] && l[0].at) > 1) takeSnapshot('Daily').then(() => { if (S.page === 'profile') renderView(); }).catch(() => {}); } } catch (_) {}
+}; }
+
+/* ---- owner: every village in one file ---- */
+OWNER_API.exportAll = async function (withProofs) {
+  requireOwner(); const out = { kind: 'villagevault-platform-backup', version: BACKUP_VER, exportedAt: stamp(), withProofs: !!withProofs, owner: Object.assign({}, OWN.data, { hash: undefined }), villages: [] };
+  for (const vil of allTenants()) { const v = await DB.load(vil.id); out.villages.push(withProofs ? JSON.parse(JSON.stringify(v)) : stripProofs(v)); }
+  olog('Exported platform backup', '', `${out.villages.length} villages${withProofs ? ' with proof images' : ''}`); OWN.save(); return out;
+};
+{ const _acc = OWNERV['o-account']; OWNERV['o-account'] = function () { return _acc() + `<section class="panel" style="max-width:640px;margin-top:16px"><div class="panel-h"><div><h2>Platform backup</h2><p>One file with every village and association. Owner sign-in details are left out.</p></div></div><div class="btn-row"><button class="btn btn-primary" type="button" data-act="o-export" data-p="0">Download all villages</button><button class="btn btn-ghost" type="button" data-act="o-export" data-p="1">With proof images</button></div></section>`; }; }
+Object.assign(ACTIONS, { 'o-export'(el) { OWNER_API.exportAll(el.dataset.p === '1').then(b => { download(`VillageVault-platform-backup-${today()}.json`, new Blob([JSON.stringify(b)], { type: 'application/json' })); toast('Platform backup downloaded.', 'ok'); }).catch(e => toast(e.message || 'Could not make the backup.', 'err')); } });
+/* =========================================================
+   ROUND 9 / #8: safer sessions and sign-in
+   - idle timeout (with a warning) and a hard 12-hour limit
+   - "remember me" tokens expire after 30 days
+   - warning when an account still has its default password
+   - optional two-step sign-in (TOTP, works with Google Authenticator,
+     Microsoft Authenticator, Authy) for the owner and each Lead Admin,
+     with 8 one-time recovery codes
+   DEMO NOTE: with no server, the secret lives in this browser's storage.
+   ========================================================= */
+const SESS_CFG = Object.assign({ idleMin: 30, warnSec: 60, absoluteHr: 12, remDays: 30, forcePwChange: false },
+  (() => { try { return JSON.parse(lsGet('vv_cfg_session') || '{}'); } catch (_) { return {}; } })());
+
+/* ---------- TOTP (RFC 6238) ---------- */
+const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+const b32enc = u => { let bits = '', out = ''; u.forEach(b => { bits += b.toString(2).padStart(8, '0'); }); for (let i = 0; i < bits.length; i += 5) out += B32[parseInt(bits.slice(i, i + 5).padEnd(5, '0'), 2)]; return out; };
+const b32dec = s => { let bits = ''; String(s).toUpperCase().replace(/[^A-Z2-7]/g, '').split('').forEach(c => { bits += B32.indexOf(c).toString(2).padStart(5, '0'); }); const out = []; for (let i = 0; i + 8 <= bits.length; i += 8) out.push(parseInt(bits.slice(i, i + 8), 2)); return new Uint8Array(out); };
+const newSecret = () => b32enc(crypto.getRandomValues(new Uint8Array(20)));
+async function hotp(secret, counter) {
+  const key = await crypto.subtle.importKey('raw', b32dec(secret), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']), msg = new Uint8Array(8); let c = counter; for (let i = 7; i >= 0; i--) { msg[i] = c & 255; c = Math.floor(c / 256); }
+  const h = new Uint8Array(await crypto.subtle.sign('HMAC', key, msg)), o = h[19] & 15, n = ((h[o] & 127) << 24) | (h[o + 1] << 16) | (h[o + 2] << 8) | h[o + 3];
+  return String(n % 1e6).padStart(6, '0');
+}
+const stepNow = () => Math.floor(Date.now() / 30000);
+async function totpCheck(rec, code) {
+  code = String(code || '').replace(/\s/g, ''); if (!/^\d{6}$/.test(code)) return false;
+  for (const d of [0, -1, 1]) { const st = stepNow() + d; if (st <= (rec.last || 0)) continue; if (await hotp(rec.secret, st) === code) { rec.last = st; return true; } }
+  return false;
+}
+const sha256 = async s => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)))).map(b => b.toString(16).padStart(2, '0')).join('');
+const newRecovery = () => Array.from({ length: 8 }, () => { const a = Array.from(crypto.getRandomValues(new Uint8Array(4))).map(b => b.toString(16).padStart(2, '0')).join(''); return a.slice(0, 4) + '-' + a.slice(4); });
+async function recoveryUse(rec, code) { code = String(code || '').trim().toLowerCase(); if (!/^[0-9a-f]{4}-[0-9a-f]{4}$/.test(code)) return false; const h = await sha256(code), i = (rec.rec || []).indexOf(h); if (i < 0) return false; rec.rec.splice(i, 1); return true; }
+const fmtSecret = s => s.match(/.{1,4}/g).join(' ');
+
+/* ---------- the sign-in gate ---------- */
+const GATE = { resolve: null };
+function ask2fa(rec, who) {
+  return new Promise(resolve => {
+    let tries = 0; GATE.resolve = resolve;
+    openModal({ title: 'Two-step sign-in', sub: `Open your authenticator app and enter the 6-digit code for ${esc(who)}. Lost your phone? Use one of your recovery codes instead (like a1b2-c3d4).`,
+      body: `<div class="field"><label for="tfC">Code</label><input id="tfC" name="code" class="input" inputmode="text" autocomplete="one-time-code" maxlength="9" placeholder="123456"></div>`, submit: 'Verify',
+      onSubmit: async fd => {
+        const code = fd.get('code'); let good = await totpCheck(rec, code), usedRec = false; if (!good) { good = await recoveryUse(rec, code); usedRec = good; }
+        if (!good) { if (++tries >= 5) { GATE.resolve = null; closeModal(); resolve(false); toast('Too many wrong codes. Sign in again.', 'err'); return; } throw new Error(`That code is not right. ${5 - tries} tries left.`); }
+        GATE.resolve = null; closeModal(); resolve({ usedRec });
+      } });
+  });
+}
+{ const _cm = closeModal; closeModal = function () { const g = GATE.resolve; GATE.resolve = null; _cm.apply(this, arguments); if (g) g(false); }; }
+
+const sessRead = () => { try { return JSON.parse(ssGet('vv_sess') || 'null'); } catch (_) { return null; } };
+const sessPatch = p => { const s = sessRead(); if (s) ssSet('vv_sess', JSON.stringify(Object.assign(s, p))); };
+{
+  const _ea = enterApp;
+  enterApp = async function (v, u, auto) {
+    if (u.totp && u.totp.secret) {
+      sessPatch({ need2fa: true });
+      const ok = await ask2fa(u.totp, u.name); if (!ok) { ssDel('vv_sess'); if (!auto) toast('Sign-in cancelled.', 'err'); return; }
+      sessPatch({ need2fa: false }); DB.save(v);
+      if (ok.usedRec) setTimeout(() => toast(`Recovery code used. ${u.totp.rec.length} left.`, 'ok'), 400);
+    }
+    sessPatch({ at: Date.now(), last: Date.now() });
+    return _ea.call(this, v, u, auto);
+  };
+  const _eo = enterOwner;
+  enterOwner = async function (silent) {
+    await OWN.load();
+    if (!silent && OWN.data.totp && OWN.data.totp.secret) {
+      sessPatch({ need2fa: true });
+      const ok = await ask2fa(OWN.data.totp, 'the owner'); if (!ok) { ssDel('vv_sess'); return; }
+      sessPatch({ need2fa: false }); OWN.save();
+    }
+    if (!silent) sessPatch({ at: Date.now(), last: Date.now() });
+    return _eo.call(this, silent);
+  };
+}
+
+/* ---------- remember-me expiry ---------- */
+{
+  const _mr = makeRemember; makeRemember = function (v, u) { _mr.call(this, v, u); try { const r = JSON.parse(lsGet(remKey(v.id))); r.at = Date.now(); lsSet(remKey(v.id), JSON.stringify(r)); } catch (_) {} };
+  const _rf = rememberedFor; rememberedFor = function (vid) { const r = _rf.call(this, vid); if (r && r.at && Date.now() - r.at > SESS_CFG.remDays * 864e5) { try { localStorage.removeItem(remKey(vid)); } catch (_) {} delete mem[remKey(vid)]; return null; } return r; };
+}
+
+/* ---------- idle and absolute timeouts ---------- */
+const SESS = { timer: null, warned: false, bound: false, last: Date.now() };
+function touch() { SESS.last = Date.now(); if (SESS.warned) { SESS.warned = false; if (!$('#modalRoot').hidden && /Still there/.test($('#modalRoot').textContent)) closeModal(); } }
+function endSession(msg) { logout(); if (msg) setTimeout(() => toast(msg, 'err'), 120); }
+function tick() {
+  if (!(S.owner || S.u)) return;
+  const s = sessRead(), now = Date.now(), idle = now - SESS.last, idleMs = SESS_CFG.idleMin * 60000, warnMs = SESS_CFG.warnSec * 1000;
+  if (s && s.at && now - s.at > SESS_CFG.absoluteHr * 3600e3) return endSession(`Signed out. Sessions last at most ${SESS_CFG.absoluteHr} hours.`);
+  if (idle >= idleMs) return endSession(`Signed out after ${SESS_CFG.idleMin} minutes of no activity.`);
+  if (idle >= idleMs - warnMs && !SESS.warned) {
+    SESS.warned = true;
+    if ($('#modalRoot').hidden) openModal({ title: 'Still there?', sub: `For your security you will be signed out in about ${SESS_CFG.warnSec} seconds.`, body: '', submit: 'Stay signed in', onSubmit: () => { touch(); closeModal(); } });
+    else toast(`You will be signed out in about ${SESS_CFG.warnSec} seconds. Tap anywhere to stay.`, 'err');
+  }
+  if (s) sessPatch({ last: SESS.last });
+}
+function startSession() {
+  if (!SESS.bound) { SESS.bound = true; ['pointerdown', 'keydown', 'touchstart', 'scroll'].forEach(e => window.addEventListener(e, () => { if (!SESS.warned || e !== 'scroll') touch(); }, { passive: true, capture: true })); }
+  if (!SESS.timer) SESS.timer = setInterval(tick, Math.min(15000, Math.max(250, SESS_CFG.warnSec * 1000 / 4)));
+  const s = sessRead(); if (s && s.need2fa) return endSession(); // a page reload must not skip the code
+  if (s && s.last && Date.now() - s.last > SESS_CFG.idleMin * 60000) return endSession(`Signed out after ${SESS_CFG.idleMin} minutes of no activity.`);
+  if (s && s.at && Date.now() - s.at > SESS_CFG.absoluteHr * 3600e3) return endSession(`Signed out. Sessions last at most ${SESS_CFG.absoluteHr} hours.`);
+  SESS.last = Date.now(); SESS.warned = false;
+}
+{ const _ra = renderApp; renderApp = function () { _ra.apply(this, arguments); startSession(); checkDefaultPw(); }; }
+
+/* ---------- default password warning ---------- */
+async function checkDefaultPw() {
+  if (S.owner && !S.v) { S.defaultPw = !!OWN.data.defaultPw; return; }
+  if (!S.u || S.owner || S.u.id === 'SUPPORT') { S.defaultPw = false; return; }
+  const key = S.v.id + S.u.id + S.u.hash; if (S._dpKey === key) return; S._dpKey = key;
+  try { const c = S.v.code.toLowerCase(); S.defaultPw = S.u.hash === await hashPw(S.v.id, S.u.id, c + (S.u.role === 'admin' ? '-admin' : '-member')); } catch (_) { S.defaultPw = false; }
+  if (S.defaultPw && SESS_CFG.forcePwChange) { S.u.mustChange = true; setTimeout(() => changePwModal(true), 200); }
+  if (S.defaultPw && S.page && $('#view')) renderView();
+}
+{ const _rv = renderView; renderView = function () { _rv.apply(this, arguments); if (S.defaultPw && !S.owner && $('#view') && !$('#dpwBanner')) $('#view').insertAdjacentHTML('afterbegin', '<div class="callout warn" id="dpwBanner"><div><b>You are using the standard password</b><p>Anyone who knows this village\'s demo or starter password can sign in as you. Choose your own password now.</p></div><button class="btn btn-primary btn-sm" type="button" data-act="change-pw">Change password</button></div>'); }; }
+{ const _cp = API.changePassword; API.changePassword = async function () { const r = await _cp.apply(this, arguments); S.defaultPw = false; S._dpKey = null; return r; }; }
+
+/* ---------- enrolment screens ---------- */
+function twoStepPanel(holder, isOwner) {
+  const on = !!(holder && holder.totp && holder.totp.secret);
+  return `<section class="panel" id="twostep"${isOwner ? ' style="max-width:640px;margin-top:16px"' : ''}><div class="panel-h"><div><h2>Two-step sign-in</h2><p>${on ? `On since ${esc(fmtTS(holder.totp.at))}. Sign-in needs a 6-digit code from your authenticator app. ${holder.totp.rec.length} recovery code${holder.totp.rec.length === 1 ? '' : 's'} left.` : 'Add a second lock. Even if someone learns your password, they cannot sign in without the code on your phone.'}</p></div>${on ? '<span class="badge b-active">On</span>' : '<span class="badge b-pending">Off</span>'}</div>
+  <div class="btn-row">${on ? `<button class="btn btn-ghost btn-sm" type="button" data-act="2fa-new-rec">New recovery codes</button><button class="btn btn-ghost btn-sm" type="button" data-act="2fa-off">Turn off</button>` : '<button class="btn btn-primary btn-sm" type="button" data-act="2fa-on">Turn on</button>'}</div></section>`;
+}
+const holder2fa = () => S.owner && !S.v ? OWN.data : S.u;
+const save2fa = () => { if (S.owner && !S.v) OWN.save(); else { log('Changed two-step sign-in', S.u.id, S.u.totp ? 'Turned on or refreshed' : 'Turned off'); commit(); } };
+function showRecovery(codes, then) {
+  infoModal('Save your recovery codes', 'Each code works once if you lose your phone', `<div class="callout upgrade" style="margin-top:12px"><div><b>Store these somewhere safe, away from your phone.</b><p>They will not be shown again.</p></div></div><pre class="recov">${codes.join('\n')}</pre><div class="btn-row"><button class="btn btn-ghost btn-sm" type="button" data-act="2fa-dl-rec" data-c="${esc(codes.join(','))}">Download as a text file</button></div>`);
+}
+Object.assign(ACTIONS, {
+  '2fa-on'() {
+    const h = holder2fa(), secret = newSecret(), who = S.owner && !S.v ? 'Owner' : S.u.id, issuer = 'VillageVault', uri = `otpauth://totp/${encodeURIComponent(issuer + ':' + who)}?secret=${secret}&issuer=${issuer}&digits=6&period=30`;
+    openModal({ title: 'Turn on two-step sign-in', sub: 'Add this account to an authenticator app (Google Authenticator, Microsoft Authenticator or Authy), then type the code it shows.',
+      body: `<ol class="steps-mini"><li>In the app choose <b>Add account</b>, then <b>Enter a setup key</b>.</li><li>Account: <b>${esc(who)}</b>. Key: <code class="seckey">${fmtSecret(secret)}</code></li><li>Type the 6-digit code the app shows below.</li></ol><details><summary>Link for apps that open it directly</summary><input class="input" readonly value="${esc(uri)}" onclick="this.select()"></details><div class="field"><label for="tfN">6-digit code</label><input id="tfN" name="code" class="input" inputmode="numeric" maxlength="6" autocomplete="off"></div>`, submit: 'Confirm and turn on',
+      onSubmit: async fd => {
+        const rec = { secret, last: 0 }; if (!(await totpCheck(rec, fd.get('code')))) throw new Error('That code is not right. Check the key in your app and the time on your phone, then try again.');
+        const codes = newRecovery(); rec.last = 0; rec.at = stamp(); rec.rec = await Promise.all(codes.map(sha256)); h.totp = rec; save2fa(); closeModal(); renderView(); setTimeout(() => showRecovery(codes), 150);
+      } });
+  },
+  '2fa-off'() {
+    const h = holder2fa();
+    openModal({ title: 'Turn off two-step sign-in?', sub: 'Enter a current code (or a recovery code) to confirm.', body: '<div class="field"><label for="tfO">Code</label><input id="tfO" name="code" class="input" maxlength="9" autocomplete="off"></div>', submit: 'Turn off', danger: true,
+      onSubmit: async fd => { let g = await totpCheck(h.totp, fd.get('code')) || await recoveryUse(h.totp, fd.get('code')); if (!g) throw new Error('That code is not right.'); delete h.totp; save2fa(); closeModal(); renderView(); toast('Two-step sign-in is off.', 'ok'); } });
+  },
+  '2fa-new-rec'() {
+    const h = holder2fa();
+    openModal({ title: 'New recovery codes', sub: 'The old codes stop working. Enter a current code to confirm.', body: '<div class="field"><label for="tfR">Code from your app</label><input id="tfR" name="code" class="input" inputmode="numeric" maxlength="6" autocomplete="off"></div>', submit: 'Make new codes',
+      onSubmit: async fd => { if (!(await totpCheck(h.totp, fd.get('code')))) throw new Error('That code is not right.'); const codes = newRecovery(); h.totp.rec = await Promise.all(codes.map(sha256)); save2fa(); closeModal(); renderView(); setTimeout(() => showRecovery(codes), 150); } });
+  },
+  '2fa-dl-rec'(el) { download('VillageVault-recovery-codes.txt', new Blob([`VillageVault recovery codes (${new Date().toISOString().slice(0, 10)})\nEach code works once.\n\n${el.dataset.c.split(',').join('\n')}\n`], { type: 'text/plain' })); },
+  'o-reset-2fa'(el) { try { OWNER_API.reset2fa(el.dataset.v, el.dataset.id); toast('Two-step sign-in reset for that admin.', 'ok'); renderView(); } catch (e) { toast(e.message, 'err'); } }
+});
+OWNER_API.reset2fa = function (vid, uid) {
+  requireOwner(); const v = DB.cache[vid], u = v && v.users.find(x => x.id === uid); if (!u || !u.totp) throw new Error('That admin has no two-step sign-in.');
+  delete u.totp; u.rememberTokens = []; olog('Reset two-step sign-in', v.name, `${u.name} (${u.id}) can set it up again after signing in`); OWN.save(); DB.save(v);
+};
+{ const _ad = ADMIN.admins; ADMIN.admins = function () { return _ad() + (S.u && S.u.lead && !S.owner ? twoStepPanel(S.u, false) : ''); }; VIEWS.admin.admins = ADMIN.admins; }
+{ const _oa = OWNERV['o-account']; OWNERV['o-account'] = function () { return _oa() + twoStepPanel(OWN.data, true); }; }
+/* =========================================================
+   ROUND 9 / #9: accessibility
+   skip link, focus moves to the page title on navigation, focus trap in
+   dialogs, toasts announced properly, tidy semantics.
+   ========================================================= */
+(function a11y() {
+  const sk = document.createElement('a'); sk.className = 'skip-link'; sk.href = '#top'; sk.textContent = 'Skip to main content';
+  sk.addEventListener('click', e => { e.preventDefault(); const t = !$('#app').hidden && $('#view') ? $('#view') : $('#top'); if (!t) return; if (!t.hasAttribute('tabindex')) t.setAttribute('tabindex', '-1'); t.focus(); t.scrollIntoView(); });
+  document.body.insertBefore(sk, document.body.firstChild);
+})();
+
+/* Tab stays inside an open dialog */
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Tab') return; const root = $('#modalRoot'); if (!root || root.hidden) return;
+  const f = $$('a[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])', root).filter(x => x.offsetParent !== null);
+  if (!f.length) return; const first = f[0], last = f[f.length - 1], a = document.activeElement;
+  if (!root.contains(a)) { e.preventDefault(); first.focus(); }
+  else if (e.shiftKey && a === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
+}, true);
+
+/* Errors are announced at once, other messages politely */
+{ const _t = toast; toast = function (msg, kind) { _t.apply(this, arguments); const box = $('#toasts'), el = box && box.lastElementChild; if (el) { el.setAttribute('role', kind === 'err' ? 'alert' : 'status'); } }; }
+
+/* When the page changes, move focus to its title so screen-reader users hear where they are */
+{
+  let lastPage = null;
+  const _rv = renderView;
+  renderView = function () {
+    _rv.apply(this, arguments);
+    try {
+      const key = (S.owner && !S.v ? 'o:' : (S.v ? S.v.id + ':' : '')) + S.page;
+      if (lastPage !== null && key !== lastPage && $('#modalRoot').hidden) { const h = $('#pageTitle'); if (h) { h.setAttribute('tabindex', '-1'); h.focus({ preventScroll: true }); } }
+      lastPage = key;
+      const nm = $('#modalRoot .modal'); if (nm && !nm.hasAttribute('aria-describedby') && nm.querySelector('p.muted')) { const p = nm.querySelector('p.muted'); p.id = 'mSub'; nm.setAttribute('aria-describedby', 'mSub'); }
+    } catch (_) {}
+  };
+}
+/* =========================================================
+   ROUND 9 / #11: owner Insights
+   Collection rate per village, activity, sponsor revenue by month,
+   rating trend. Plain HTML/SVG, hover + keyboard tooltips, table views.
+   ========================================================= */
+const MON_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function lastMonths(n) { const d = new Date(), out = []; for (let i = n - 1; i >= 0; i--) { const x = new Date(d.getFullYear(), d.getMonth() - i, 1); out.push({ key: `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}`, label: MON_NAMES[x.getMonth()], title: `${MON_NAMES[x.getMonth()]} ${x.getFullYear()}` }); } return out; }
+function villageInsight(v, vil) {
+  const yr = new Date().getFullYear(), fixed = (v.levyList || []).filter(l => l.fixed), members = v.users.filter(u => u.role === 'member' && u.active), paid = new Map();
+  let latest = 0, recent = 0; const now = Date.now();
+  v.tx.forEach(t => { const ts = new Date(t.submittedAt || t.date).getTime() || 0; if (ts > latest) latest = ts; if (now - ts < 30 * 864e5) recent++; if (t.status === 'verified' && yearOf(t.date) === yr) { const k = t.memberId + '|' + t.levy; paid.set(k, (paid.get(k) || 0) + (Number(t.amount) || 0)); } });
+  let need = 0, got = 0; members.forEach(m => fixed.forEach(l => { const n = v.settings.levies[l.id] || 0; need += n; got += Math.min(n, paid.get(m.id + '|' + l.id) || 0); }));
+  return { vil, v, members: members.length, need, got, rate: need ? got / need : 0, latest, recent, live: !(vil.removed) && v.status !== 'suspended', status: vil.removed ? 'Removed' : v.status === 'suspended' ? 'Paused' : v.status === 'readonly' ? 'Read-only' : 'Active', plan: v.plan === 'premium' ? 'Premium' : 'Basic' };
+}
+function activityBand(r) { if (!r.latest) return ['Dormant', 'No records yet']; const d = (Date.now() - r.latest) / 864e5; return d <= 30 ? ['Active', 'Activity in the last 30 days'] : d <= 90 ? ['Quiet', 'Last activity 1 to 3 months ago'] : ['Dormant', 'Nothing for over 3 months']; }
+
+/* one shared tooltip for every chart mark (hover, focus, touch) */
+(function vzTip() {
+  const tip = document.createElement('div'); tip.className = 'vz-tip'; tip.setAttribute('role', 'tooltip'); tip.hidden = true; document.body.appendChild(tip);
+  const show = el => { tip.innerHTML = el.dataset.tip; tip.hidden = false; const r = el.getBoundingClientRect(), t = tip.getBoundingClientRect(); let x = r.left + r.width / 2 - t.width / 2, y = r.top - t.height - 8; if (y < 4) y = r.bottom + 8; x = Math.max(8, Math.min(innerWidth - t.width - 8, x)); tip.style.left = x + 'px'; tip.style.top = y + 'px'; };
+  const hide = () => { tip.hidden = true; };
+  document.addEventListener('mouseover', e => { const m = e.target.closest && e.target.closest('[data-tip]'); if (m) show(m); else hide(); });
+  document.addEventListener('focusin', e => { const m = e.target.closest && e.target.closest('[data-tip]'); if (m) show(m); });
+  document.addEventListener('focusout', hide); document.addEventListener('scroll', hide, true); document.addEventListener('touchstart', e => { const m = e.target.closest && e.target.closest('[data-tip]'); if (m) show(m); else hide(); }, { passive: true });
+})();
+
+const pct = n => Math.round(n * 100) + '%';
+function barRows(rows, fmtTip) {
+  const max = 1;
+  return `<div class="vz-bars" role="list">${rows.map(r => `<div class="vz-row" role="listitem"><div class="vz-lab">${esc(r.label)}<small>${esc(r.sub || '')}</small></div><div class="vz-track"><div class="vz-bar" style="width:${Math.max(.8, r.value / max * 100).toFixed(1)}%" tabindex="0" data-tip="${esc(fmtTip(r))}" aria-label="${esc(fmtTip(r).replace(/<[^>]+>/g, ' '))}"></div></div><div class="vz-val">${pct(r.value)}</div></div>`).join('')}</div>`;
+}
+function columnChart(points, unit, fmt) {
+  const W = 520, H = 220, L = 46, R = 8, T = 14, B = 28, max = Math.max(1, ...points.map(p => p.v)), nice = Math.pow(10, Math.floor(Math.log10(max))), top = Math.ceil(max / nice * 2) / 2 * nice || 1, bw = (W - L - R) / points.length;
+  const y = v => T + (H - T - B) * (1 - v / top), grid = [0, .5, 1].map(f => f * top);
+  return `<svg class="vz-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(unit)} by month">${grid.map(g => `<line x1="${L}" x2="${W - R}" y1="${y(g)}" y2="${y(g)}" class="vz-grid"/><text x="${L - 6}" y="${y(g) + 4}" class="vz-ax" text-anchor="end">${esc(fmt(g, true))}</text>`).join('')}
+  ${points.map((p, i) => { const x = L + i * bw + bw * .18, w = bw * .64, h = Math.max(0, (H - T - B) * p.v / top); return `<g><path d="M${x} ${T + (H - T - B)} v${-Math.max(0, h - 4)} q0 -4 4 -4 h${w - 8} q4 0 4 4 v${Math.max(0, h - 4)} z" class="vz-col" tabindex="0" data-tip="${esc(p.title)}<br><b>${esc(fmt(p.v))}</b>" aria-label="${esc(p.title + ': ' + fmt(p.v))}"/><text x="${x + w / 2}" y="${H - 8}" class="vz-ax" text-anchor="middle">${esc(p.label)}</text></g>`; }).join('')}</svg>`;
+}
+function lineChart(points) {
+  const W = 520, H = 220, L = 34, R = 14, T = 14, B = 28, x = i => L + (W - L - R) * (points.length === 1 ? .5 : i / (points.length - 1)), y = v => T + (H - T - B) * (1 - (v - 1) / 4), have = points.filter(p => p.n);
+  let d = '', pen = false; points.forEach((p, i) => { if (!p.n) { pen = false; return; } d += `${pen ? 'L' : 'M'}${x(i).toFixed(1)} ${y(p.avg).toFixed(1)} `; pen = true; });
+  return `<svg class="vz-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Average rating by month">${[1, 2, 3, 4, 5].map(g => `<line x1="${L}" x2="${W - R}" y1="${y(g)}" y2="${y(g)}" class="vz-grid"/><text x="${L - 6}" y="${y(g) + 4}" class="vz-ax" text-anchor="end">${g}</text>`).join('')}
+  <path d="${d}" class="vz-line"/>${points.map((p, i) => p.n ? `<circle cx="${x(i)}" cy="${y(p.avg)}" r="5" class="vz-dot" tabindex="0" data-tip="${esc(p.title)}<br><b>${p.avg.toFixed(1)} / 5</b> from ${p.n} rating${p.n === 1 ? '' : 's'}" aria-label="${esc(p.title + ': ' + p.avg.toFixed(1) + ' from ' + p.n + ' ratings')}"/>` : '').join('')}
+  ${points.map((p, i) => `<text x="${x(i)}" y="${H - 8}" class="vz-ax" text-anchor="middle">${esc(p.label)}</text>`).join('')}</svg>`;
+}
+const tableView = (heads, rows) => `<details class="vz-table"><summary>View as a table</summary>${table(heads, rows, ['No data', ''])}</details>`;
+
+OWNERV['o-insights'] = function () {
+  const rows = VILLAGES.map(vil => ({ vil, v: DB.cache[vil.id] })).filter(r => r.v && !r.vil.removed).map(r => villageInsight(r.v, r.vil)), live = rows.filter(r => r.live);
+  const ranked = live.filter(r => r.need > 0).sort((a, b) => b.rate - a.rate), bands = rows.map(r => ({ r, b: activityBand(r) }));
+  const activeN = bands.filter(x => x.b[0] === 'Active').length, totNeed = sum(live, 'need'), totGot = sum(live, 'got');
+  const months = lastMonths(6), pay = SPN.load().payments, rev = months.map(m => Object.assign({}, m, { v: pay.filter(p => String(p.paid_at).slice(0, 7) === m.key).reduce((a, p) => a + (Number(p.amount_kobo) || 0) / 100, 0) }));
+  const revTotal = sum(rev, 'v'), rv = RV.load(), trend = months.map(m => { const l = rv.filter(r => String(r.ts).slice(0, 7) === m.key); return Object.assign({}, m, { n: l.length, avg: l.length ? sum(l, 'stars') / l.length : 0 }); });
+  const dist = [5, 4, 3, 2, 1].map(s => ({ s, n: rv.filter(r => r.stars === s).length })), avgAll = rv.length ? (sum(rv, 'stars') / rv.length).toFixed(1) : '-';
+  const money0 = (n, short) => short ? (n >= 1000 ? '₦' + Math.round(n / 1000) + 'k' : '₦' + Math.round(n)) : money(n);
+  return `<div class="viz-root"><div class="kpis">${kpi('Active villages', `${activeN} of ${rows.length}`, 'Activity in the last 30 days', 'hot')}${kpi('Collected so far', totNeed ? pct(totGot / totNeed) : '-', `${money(totGot)} of ${money(totNeed)} required in ${new Date().getFullYear()}`, 'good')}${kpi('Sponsor income, 6 months', money(revTotal), 'Paid to the platform')}${kpi('Average rating', avgAll === '-' ? '-' : avgAll + ' / 5', `${rv.length} rating${rv.length === 1 ? '' : 's'}`)}</div>
+  <section class="panel"><div class="panel-h"><div><h2>Collection rate by village</h2><p>Share of this year's required levies that have been paid and verified. Highest first. Hover or focus a bar for the amounts.</p></div></div>
+  ${ranked.length ? barRows(ranked.map(r => ({ label: r.vil.name, sub: `${r.members} members · ${r.plan}`, value: Math.min(1, r.rate), r })), x => `${x.label}<br><b>${pct(x.value)}</b> collected<br>${money(x.r.got)} of ${money(x.r.need)}`) : '<div class="empty"><b>No data yet</b></div>'}
+  ${tableView(['Village', { t: 'Members', num: true }, { t: 'Required', num: true }, { t: 'Collected', num: true }, { t: 'Rate', num: true }], ranked.map(r => [esc(r.vil.name), String(r.members), money(r.need), money(r.got), pct(r.rate)]))}</section>
+  <div class="grid-2e"><section class="panel"><div class="panel-h"><div><h2>Sponsor income by month</h2><p>Sponsor payments received, last 6 months.</p></div></div>${revTotal ? columnChart(rev, 'Sponsor income', money0) : '<div class="empty"><b>No sponsor payments in this period</b></div>'}${tableView(['Month', { t: 'Income', num: true }], rev.map(m => [esc(m.title), money(m.v)]))}</section>
+  <section class="panel"><div class="panel-h"><div><h2>Rating trend</h2><p>Average stars from members and admins, by month.</p></div></div>${rv.length ? lineChart(trend) : '<div class="empty"><b>No ratings yet</b>They appear after members and admins finish tasks.</div>'}
+  ${rv.length ? `<div class="vz-dist">${dist.map(d => `<div class="vz-drow"><span>${d.s} ★</span><div class="vz-track"><div class="vz-bar" style="width:${rv.length ? Math.max(d.n ? 2 : 0, d.n / rv.length * 100) : 0}%" data-tip="${d.n} rating${d.n === 1 ? '' : 's'}" tabindex="0"></div></div><b>${d.n}</b></div>`).join('')}</div>` : ''}${tableView(['Month', { t: 'Ratings', num: true }, { t: 'Average', num: true }], trend.map(m => [esc(m.title), String(m.n), m.n ? m.avg.toFixed(1) : '-']))}</section></div>
+  <section class="panel"><div class="panel-h"><div><h2>Village activity</h2><p>Active means a payment was recorded in the last 30 days.</p></div></div>
+  ${table(['Village', 'Plan', 'Access', { t: 'Members', num: true }, 'Activity', { t: 'Rate', num: true }], bands.sort((a, b) => b.r.recent - a.r.recent).map(({ r, b }) => [esc(r.vil.name), r.plan, r.status, String(r.members), `<span class="badge ${b[0] === 'Active' ? 'b-active' : b[0] === 'Quiet' ? 'b-pending' : 'b-off'}">${b[0]}</span><small>${esc(b[1])}${r.recent ? ' · ' + r.recent + ' recent' : ''}</small>`, r.need ? pct(r.rate) : '-']), ['No villages', ''])}</section></div>`;
+};
+/* =========================================================
+   ROUND 10: Men's Wing and Women's Wing for every village and association.
+   A wing is its own workspace under its village: its own members, admins,
+   payments, register, meetings, receipts and reports, with exactly the
+   same member and admin access as a village. Wing data is stored apart
+   (key "vv_v1_<village>~men" / "~women"), so nothing in the village changes.
+   Wings are chosen from the same village or association dropdown.
+   ========================================================= */
+const WING_KINDS = { men: { suffix: 'M', label: 'Men’s Wing' }, women: { suffix: 'W', label: 'Women’s Wing' } };
+const wingLabel = k => (WING_KINDS[k] || {}).label || '';
+const wingCache = {};
+const baseId = id => String(id == null ? '' : id).split('~')[0];
+function makeWing(p, kind) {
+  const K = WING_KINDS[kind];
+  return { id: `${p.id}~${kind}`, parent: p.id, wing: kind, color: p.color, tag: K.label,
+    get name() { return `${p.name} ${K.label}`; }, get code() { return p.code + K.suffix; }, get type() { return p.type || 'village'; },
+    get removed() { return !!p.removed; }, set removed(_) {} };
+}
+function wingsOf(p) { return ['men', 'women'].map(k => { const id = `${p.id}~${k}`; if (!wingCache[id] || wingCache[id]._p !== p) { wingCache[id] = makeWing(p, k); Object.defineProperty(wingCache[id], '_p', { value: p, enumerable: false }); } return wingCache[id]; }); }
+function vilById(id) {
+  const v = VILLAGES.find(x => x.id === id); if (v) return v;
+  const m = /^(.+)~(men|women)$/.exec(String(id)); if (!m) return null;
+  const p = VILLAGES.find(x => x.id === m[1]); return p ? wingsOf(p).find(w => w.wing === m[2]) : null;
+}
+const allTenants = () => VILLAGES.flatMap(v => [v, ...wingsOf(v)]);
+const tenantList = () => VILLAGES.filter(v => !v.removed).flatMap(v => [v, ...wingsOf(v)]);
+
+function wingPlan(parentId) {
+  const r = PLAN_REG.load()[parentId], c = DB.cache[parentId];
+  return r || (c && c.plan) || (['umuokpu', 'amakwu', 'ezinkwo'].indexOf(parentId) >= 0 ? 'premium' : 'basic');
+}
+// A wing of a village that came with the demo gets a small sample register; a wing of a village the owner created starts empty with one Lead Admin.
+async function seedWing(w) {
+  const p = VILLAGES.find(x => x.id === w.parent);
+  if (!p.custom) return seedVillage(w);
+  const settings = { levies: {} }; LEVIES.forEach(l => { settings.levies[l.id] = l.def; }); settings.accounts = []; settings.payNote = 'Pay into the account above, then upload your proof of payment on this site. Never pay cash to anyone except the treasurer.';
+  const uid = `${w.code}-A01`, hash = await hashPw(w.id, uid, `${w.code.toLowerCase()}-admin`);
+  return { id: w.id, name: w.name, code: w.code, type: w.type, wing: w.wing, parent: w.parent, settings, plan: wingPlan(w.parent), status: 'active', logo: null, meetings: [], tx: [], expenses: [], audit: [], seq: { tx: 0, exp: 0, aud: 0, mbr: 0 }, seededAt: stamp(),
+    users: [{ id: uid, name: `${w.name} Lead Admin`, role: 'admin', title: getRoles()[0], lead: true, family: '', kindred: '', phone: '', email: '', joined: today(), active: true, hash, mustChange: true }] };
+}
+// Name, code, category and access status always follow the village.
+function syncWing(d, w) {
+  let pd = DB.cache[w.parent]; if (!pd) { try { pd = JSON.parse(lsGet('vv_v1_' + w.parent) || 'null'); } catch (_) { pd = null; } }
+  d.name = w.name; d.code = w.code; d.type = w.type; d.wing = w.wing; d.parent = w.parent; d.status = (pd && pd.status) || 'active';
+}
+(function wrapWingApis() {
+  const mv = OWNER_API.manageVillage;
+  OWNER_API.manageVillage = function (id, d) {
+    const r = mv.call(OWNER_API, id, d), st = (DB.cache[id] || {}).status || 'active';
+    wingsOf(VILLAGES.find(x => x.id === id) || { id }).forEach(w => { const wd = DB.cache[w.id]; if (wd) { wd.status = st; wd.name = w.name; DB.save(wd); } });
+    return r;
+  };
+  const dv = OWNER_API.deleteVillage;
+  OWNER_API.deleteVillage = function (id) {
+    const r = dv.call(OWNER_API, id);
+    ['men', 'women'].forEach(k => { const wid = `${id}~${k}`; delete DB.cache[wid]; delete wingCache[wid]; try { localStorage.removeItem('vv_v1_' + wid); } catch (_) {} const reg = PLAN_REG.load(); delete reg[wid]; PLAN_REG.save(reg); });
+    return r;
+  };
+})();
+/* =========================================================
+   MEETING MINUTES (Premium). Frontend only, per ASSOCIET Phase 10.5.
+   Secretary writes. Chairman approves (never the writer). Members read APPROVED,
+   non-executive minutes only. Everything downloadable. Both signatures on every document.
+   Visibility is decided in ONE place: minuteVisible().
+   NOTE: this stops casual tampering only. Real enforcement needs the backend.
+   ========================================================= */
+const DEFAULT_MTYPES = [['General meeting', 0], ['Executive and elders meeting', 1], ['Annual general meeting', 0], ['Emergency meeting', 0]];
+const minutesOn = () => planAllows('minutes');
+const isSecretary = () => !!S.u && !S.owner && S.u.id !== 'SUPPORT' && S.u.role === 'admin' && S.u.active && S.u.title === 'Secretary';
+const isChair = () => !!S.u && !S.owner && S.u.id !== 'SUPPORT' && S.u.role === 'admin' && S.u.active && S.u.title === 'Chairman';
+const mtypesAll = () => S.v.meetingTypes || [];
+const mtypesLive = () => mtypesAll().filter(t => !t.removed);
+const mtypeOf = id => mtypesAll().find(t => t.id === id);
+/* the single visibility rule used by lists, counters, PDFs and audio */
+const minuteVisible = m => isAdmin() ? true : (m.status === 'approved' && !m.adminOnly);
+const visibleMinutes = () => (S.v.minutes || []).filter(minuteVisible).sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+const getMin = id => { const m = (S.v.minutes || []).find(x => x.id === id); if (!m || !minuteVisible(m)) throw new Error('Those minutes are not available.'); return m; };
+const MIN_BADGE = { draft: '<span class="badge b-off">Draft</span>', submitted: '<span class="badge b-pending">Waiting for the Chairman</span>', approved: '<span class="badge b-verified">Approved</span>', rejected: '<span class="badge b-rejected">Returned</span>' };
+const lines = s => String(s || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+
+/* ---------- Audio, kept in the browser's IndexedDB (too big for localStorage) ---------- */
+const AUDIO = {
+  open() { return new Promise((res, rej) => { try { const r = indexedDB.open('vv_audio', 1); r.onupgradeneeded = () => r.result.createObjectStore('a'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); } catch (e) { rej(e); } }); },
+  async put(key, blob) { const db = await this.open(); return new Promise((res, rej) => { const t = db.transaction('a', 'readwrite'); t.objectStore('a').put(blob, key); t.oncomplete = () => res(); t.onerror = () => rej(t.error); }); },
+  async get(key) { const db = await this.open(); return new Promise((res, rej) => { const r = db.transaction('a').objectStore('a').get(key); r.onsuccess = () => res(r.result || null); r.onerror = () => rej(r.error); }); },
+  async del(key) { const db = await this.open(); return new Promise(res => { const t = db.transaction('a', 'readwrite'); t.objectStore('a').delete(key); t.oncomplete = () => res(); t.onerror = () => res(); }); }
+};
+const audioKey = m => `${S.v.id}:${m.id}`;
+const REC = { rec: null, chunks: [], blob: null, t0: 0, timer: null };
+function recReset() { try { if (REC.rec && REC.rec.state !== 'inactive') REC.rec.stop(); } catch (_) {} clearInterval(REC.timer); REC.rec = null; REC.chunks = []; REC.blob = null; }
+
+/* ---------- Data operations ---------- */
+Object.assign(API, {
+  saveMinute(d, id) {
+    requireAdmin(); assertFeature('minutes', 'Meeting minutes');
+    if (!isSecretary()) throw new Error('Only the Secretary writes minutes.');
+    const reg = d.meetingId ? S.v.meetings.find(x => x.id === d.meetingId) : null; if (d.meetingId && !reg) throw new Error('That register was not found.');
+    if (reg) { if (reg.typeId) d.typeId = reg.typeId; d.date = reg.date; }
+    const t = mtypeOf(d.typeId); if (!t || (t.removed && !(reg && reg.typeId === t.id))) throw new Error('Choose a meeting type.');
+    const title = String(d.title || '').trim(); if (title.length < 3) throw new Error('Enter the meeting title.');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d.date || '') || d.date > today()) throw new Error('Enter the meeting date. It cannot be in the future.');
+    const body = { typeId: t.id, typeName: t.name, adminOnly: !!(t.exec || (reg && reg.exec)), title: title.slice(0, 80), date: d.date, venue: String(d.venue || '').trim().slice(0, 80), meetingId: d.meetingId || '', apologies: String(d.apologies || '').trim().slice(0, 300), attendNote: String(d.attendNote || '').trim().slice(0, 300), agenda: lines(d.agenda).slice(0, 30).map(x => x.slice(0, 160)), discussion: String(d.discussion || '').trim().slice(0, 8000), resolutions: lines(d.resolutions).slice(0, 40).map(x => x.slice(0, 300)), actions: lines(d.actions).slice(0, 40).map(x => x.slice(0, 300)) };
+    let m;
+    if (id) { m = (S.v.minutes || []).find(x => x.id === id); if (!m || !['draft', 'rejected'].includes(m.status)) throw new Error('Minutes can be edited only while they are a draft or returned.'); Object.assign(m, body, { status: 'draft', updatedAt: stamp() }); log('Edited minutes draft', m.id, m.title); }
+    else { S.v.minutes = S.v.minutes || []; m = Object.assign({ id: nextId('min', 'M'), status: 'draft', writtenById: S.u.id, writtenBy: S.u.name, writtenAt: stamp(), audio: null }, body); S.v.minutes.push(m); log('Started minutes draft', m.id, m.title); }
+    commit(); return m;
+  },
+  submitMinute(id) {
+    requireAdmin(); assertFeature('minutes', 'Meeting minutes'); if (!isSecretary()) throw new Error('Only the Secretary submits minutes.');
+    const m = (S.v.minutes || []).find(x => x.id === id); if (!m || !['draft', 'rejected'].includes(m.status)) throw new Error('These minutes cannot be submitted.');
+    if (!m.discussion && !m.resolutions.length) throw new Error('Add the discussion or at least one resolution before you submit.');
+    if (m.meetingId) { const mt = S.v.meetings.find(x => x.id === m.meetingId); if (mt) m.present = mt.marks.filter(k => k.status === 'verified').map(k => (userById(k.memberId) || {}).name).filter(Boolean).sort(); }
+    m.status = 'submitted'; m.submittedAt = stamp(); delete m.rejectReason; log('Submitted minutes for approval', m.id, m.title); commit(); return m;
+  },
+  approveMinute(id) {
+    requireAdmin(); assertFeature('minutes', 'Meeting minutes'); if (!isChair()) throw new Error('Only the Chairman approves minutes.');
+    const m = (S.v.minutes || []).find(x => x.id === id); if (!m || m.status !== 'submitted') throw new Error('These minutes are not waiting for approval.');
+    if (m.writtenById === S.u.id) throw new Error('The person who wrote the minutes cannot approve them.');
+    const sec = userById(m.writtenById) || {}, yr = Number(m.date.slice(0, 4)); S.v.seq.minNo = S.v.seq.minNo || {}; S.v.seq.minNo[yr] = (S.v.seq.minNo[yr] || 0) + 1;
+    m.no = `MIN/${S.v.code}/${yr}/${String(S.v.seq.minNo[yr]).padStart(4, '0')}`;
+    m.sigs = { chair: { name: S.u.name, title: 'Chairman', img: S.u.signature || null }, sec: { name: sec.name || m.writtenBy, title: 'Secretary', img: sec.signature || null } };
+    m.status = 'approved'; m.approvedById = S.u.id; m.approvedBy = S.u.name; m.approvedAt = stamp(); log('Approved minutes', m.id, `${m.no}: ${m.title}`); commit(); return m;
+  },
+  rejectMinute(id, reason) {
+    requireAdmin(); assertFeature('minutes', 'Meeting minutes'); if (!isChair()) throw new Error('Only the Chairman can return minutes.');
+    const m = (S.v.minutes || []).find(x => x.id === id); if (!m || m.status !== 'submitted') throw new Error('These minutes are not waiting for approval.');
+    reason = String(reason || '').trim(); if (reason.length < 5) throw new Error('Say what must be corrected.');
+    m.status = 'rejected'; m.rejectReason = reason.slice(0, 300); m.rejectedBy = S.u.name; log('Returned minutes', m.id, reason.slice(0, 120)); commit(); return m;
+  },
+  deleteMinuteDraft(id) {
+    requireAdmin(); if (!isSecretary()) throw new Error('Only the Secretary can delete a draft.');
+    const i = (S.v.minutes || []).findIndex(x => x.id === id), m = S.v.minutes[i]; if (!m || !['draft', 'rejected'].includes(m.status)) throw new Error('Only a draft can be deleted. Approved minutes are kept.');
+    S.v.minutes.splice(i, 1); log('Deleted minutes draft', id, m.title); commit(); AUDIO.del(`${S.v.id}:${id}`);
+  },
+  saveMeetingTypes(rows) {
+    requireAdmin(); if (!isLeadAdmin()) throw new Error('Only the Lead Admin edits meeting types.');
+    const out = [], seen = new Set();
+    rows.forEach(r => { const n = String(r.name || '').trim().slice(0, 50); if (!n) return; const k = n.toLowerCase(); if (seen.has(k)) throw new Error(`"${n}" appears twice.`); seen.add(k); out.push({ id: r.id || ('T' + Math.random().toString(36).slice(2, 8)), name: n, exec: !!r.exec, removed: false }); });
+    if (!out.length) throw new Error('Keep at least one meeting type.');
+    mtypesAll().forEach(t => { if (!out.some(o => o.id === t.id)) out.push(Object.assign({}, t, { removed: true })); });   // old minutes keep their type name
+    S.v.meetingTypes = out; log('Edited meeting types', 'Minutes', out.filter(t => !t.removed).map(t => t.name + (t.exec ? ' (executive)' : '')).join('; ')); commit();
+  }
+});
+
+/* ---------- PDF ---------- */
+async function minutePdf(m) {
+  const pdf = new PDF(), M = 48, CW = pdf.W - 96, INK = '#14142B', MUT = '#5B5F7A', prem = true;
+  if (m.status !== 'approved') pdf.wm = 'DRAFT';
+  let y = 0;
+  pdf.rect(0, 0, pdf.W, 96, '#1A1A4E'); pdf.rect(0, 96, pdf.W, 4, '#F5B83D');
+  if (S.v.logo) { try { pdf.img(S.v.logo, M, 22, 52, 52); } catch (_) {} }
+  const hx = S.v.logo ? M + 66 : M;
+  pdf.text(pdf.fit(`${S.v.name} (${S.v.code})`, CW - 150, 14, true), hx, 40, { size: 14, bold: true, color: '#F5B83D' });
+  pdf.text('MINUTES OF MEETING', hx, 66, { size: 20, bold: true, color: '#FFFFFF' });
+  pdf.text(m.no || 'Draft, not yet approved', pdf.W - M, 40, { size: 9, color: '#DADCF5', align: 'right' });
+  y = 124;
+  const newPage = () => { pdf.add(); y = 56; };
+  const ensure = h => { if (y + h > pdf.H - 60) newPage(); };
+  const h = t => { ensure(40); pdf.text(t, M, y, { size: 11.5, bold: true, color: '#1A1A4E' }); y += 6; pdf.line(M, y, M + CW, y, '#1A1A4E', .8); y += 14; };
+  const wrap = (txt, size, x0, w0) => { const out = []; String(txt).split(/\r?\n/).forEach(par => { let cur = ''; par.split(/\s+/).filter(Boolean).forEach(wd => { const t = cur ? cur + ' ' + wd : wd; if (pdf.w(t, size, false) <= w0) cur = t; else { if (cur) out.push(cur); cur = wd; } }); out.push(cur); }); return out; };
+  const para = (txt, o) => { o = o || {}; const size = o.size || 10, x0 = M + (o.indent || 0), lh = size * 1.45; wrap(txt, size, x0, CW - (o.indent || 0)).forEach(l => { ensure(lh); if (l) pdf.text(l, x0, y, { size, color: INK }); y += lh; }); y += o.gap == null ? 4 : o.gap; };
+  const kv = (k, v) => { ensure(16); pdf.text(k, M, y, { size: 9.5, bold: true, color: MUT }); pdf.text(pdf.fit(v || '-', CW - 110, 10, false), M + 110, y, { size: 10, color: INK }); y += 16; };
+  kv('Meeting', m.title); kv('Type', m.typeName); kv('Date', fmtDate(m.date)); kv('Venue', m.venue || 'Not stated');
+  y += 6; h('Attendance');
+  if (m.present && m.present.length) para(`Present (${m.present.length}): ${m.present.join(', ')}`);
+  if (m.attendNote) para(m.attendNote);
+  if (m.apologies) para(`Apologies: ${m.apologies}`);
+  if (!(m.present && m.present.length) && !m.attendNote && !m.apologies) para('Not recorded.');
+  if (m.agenda.length) { h('Agenda'); m.agenda.forEach((a, i) => para(`${i + 1}. ${a}`, { gap: 1 })); y += 4; }
+  if (m.discussion) { h('Discussion'); para(m.discussion); }
+  if (m.resolutions.length) { h('Resolutions'); m.resolutions.forEach((a, i) => para(`${i + 1}. ${a}`, { gap: 2 })); y += 4; }
+  if (m.actions.length) { h('Action items'); m.actions.forEach((a, i) => para(`${i + 1}. ${a}`, { gap: 2 })); y += 4; }
+  ensure(110); y += 14;
+  const sg = m.sigs || { chair: { name: (holderOf('Chairman') || {}).name || '', title: 'Chairman', img: (holderOf('Chairman') || {}).signature || null }, sec: { name: m.writtenBy, title: 'Secretary', img: (userById(m.writtenById) || {}).signature || null } };
+  [[sg.sec, M], [sg.chair, M + CW - 200]].forEach(([s, x]) => { if (s.img) { try { pdf.img(s.img, x, y - 4, 120, 40, 300, 120); } catch (_) {} } pdf.line(x, y + 40, x + 200, y + 40, INK, .8); pdf.text(s.name || '', x, y + 54, { size: 9.5, bold: true, color: INK }); pdf.text(s.title, x, y + 67, { size: 8.5, color: MUT }); });
+  y += 84;
+  if (m.status === 'approved') pdf.text(`Approved by ${m.approvedBy} on ${fmtTS(m.approvedAt)}. Written by ${m.writtenBy}.`, M, y, { size: 8.5, color: MUT });
+  else pdf.text('DRAFT. Not valid until the Chairman approves it.', M, y, { size: 8.5, bold: true, color: '#B45309' });
+  const n = pdf.pages.length;
+  pdf.pages.forEach((pg, i) => { pdf.p = pg; pdf.line(M, pdf.H - 40, M + CW, pdf.H - 40, '#DCE3E0'); pdf.text(`${S.v.name} (${S.v.code}) | ${m.title} | ${fmtDate(m.date)}`, M, pdf.H - 26, { size: 7.5, color: MUT }); pdf.text(`Page ${i + 1} of ${n}`, M + CW, pdf.H - 26, { size: 7.5, color: MUT, align: 'right' }); });
+  return pdf.build(`${m.title} minutes`);
+}
+
+/* ---------- Views ---------- */
+const upgradeCard = () => `<section class="panel"><div class="panel-h"><div><h2>Meeting minutes ${premiumBadge}</h2><p>Minutes are part of the Premium plan. The Secretary writes them, the Chairman approves them, and members read the approved ones here. Ask the owner to upgrade ${esc(S.v.name)}.</p></div></div></section>`;
+function minutesRows(list) {
+  return list.map(m => [`${esc(m.no || '-')}<small>${esc(m.id)}</small>`, esc(fmtDate(m.date)), `${esc(m.title)}<small>${esc(m.typeName)}${m.adminOnly ? ' | admins only' : ''}</small>`, MIN_BADGE[m.status], `<button class="btn btn-ghost btn-sm" type="button" data-act="min-view" data-id="${esc(m.id)}">Open</button>`]);
+}
+function minutesView() {
+  if (!minutesOn()) return upgradeCard();
+  const list = visibleMinutes(), admin = isAdmin(), waiting = (S.v.minutes || []).filter(m => m.status === 'submitted').length;
+  const sec = holderOf('Secretary'), ch = holderOf('Chairman');
+  const btns = `${isSecretary() ? '<button class="btn btn-primary btn-sm" type="button" data-act="min-new">Write minutes</button>' : ''}${isLeadAdmin() && admin ? '<button class="btn btn-ghost btn-sm" type="button" data-act="min-types">Meeting types</button>' : ''}${admin ? '<button class="btn btn-ghost btn-sm" type="button" data-act="min-csv">Download list (CSV)</button>' : ''}`;
+  const info = admin ? `<div class="callout"><div><b>${waiting ? `${waiting} set${waiting === 1 ? '' : 's'} of minutes waiting for the Chairman` : 'How minutes work'}</b><p>Secretary: ${sec ? esc(sec.name) : '<b>nobody holds this duty yet</b>'}. Chairman: ${ch ? esc(ch.name) : '<b>nobody holds this duty yet</b>'}. The Secretary writes, the Chairman approves. Executive meeting minutes stay with admins.</p></div></div>` : '';
+  return `<section class="panel"><div class="panel-h"><div><h2>Meeting minutes</h2><p>${admin ? 'Every set of minutes, including drafts.' : 'Approved minutes of your village meetings. You can download each one.'}</p></div><div class="btn-row">${btns}</div></div>${info}
+  ${table(['Number', 'Date', 'Meeting', 'Status', ''], minutesRows(list), ['No minutes yet', admin ? 'The Secretary starts them with Write minutes.' : 'Approved minutes appear here.'])}</section>`;
+}
+VIEWS.member.minutes = minutesView; VIEWS.admin.minutes = minutesView;
+
+function minForm(m) {
+  m = m || {}; const ms = S.v.meetings.slice().sort((a, b) => b.date.localeCompare(a.date));
+  const tOpts = mtypesLive().map(t => opt(t.id, t.name + (t.exec ? ' (executive, admins only)' : ''), m.typeId)).join('');
+  return `<div class="grid2"><div class="field"><label for="mnT">Meeting type</label><select id="mnT" name="typeId" class="input">${tOpts}</select></div><div class="field"><label for="mnD">Meeting date</label><input id="mnD" name="date" class="input" type="date" max="${today()}" value="${esc(m.date || today())}" required></div></div>
+  <div class="field"><label for="mnTi">Title</label><input id="mnTi" name="title" class="input" maxlength="80" value="${esc(m.title || '')}" placeholder="For example: General meeting, October" required></div>
+  <div class="grid2"><div class="field"><label for="mnV">Venue</label><input id="mnV" name="venue" class="input" maxlength="80" value="${esc(m.venue || '')}"></div><div class="field"><label for="mnM">Attendance from a register</label><select id="mnM" name="meetingId" class="input">${opt('', 'None, I will type it', m.meetingId)}${ms.map(x => opt(x.id, `${fmtDate(x.date)}: ${x.title}`, m.meetingId)).join('')}</select><span class="hint">Verified names are copied when you submit.</span></div></div>
+  <div class="field"><label for="mnA">Apologies (names)</label><input id="mnA" name="apologies" class="input" maxlength="300" value="${esc(m.apologies || '')}"></div>
+  <div class="field"><label for="mnN">Attendance note</label><input id="mnN" name="attendNote" class="input" maxlength="300" value="${esc(m.attendNote || '')}" placeholder="For example: Quorum formed with 18 members"></div>
+  <div class="field"><label for="mnAg">Agenda (one item per line)</label><textarea id="mnAg" name="agenda" class="input" rows="3">${esc((m.agenda || []).join('\n'))}</textarea></div>
+  <div class="field"><label for="mnDi">Discussion</label><textarea id="mnDi" name="discussion" class="input" rows="6" maxlength="8000">${esc(m.discussion || '')}</textarea></div>
+  <div class="field"><label for="mnR">Resolutions (one per line)</label><textarea id="mnR" name="resolutions" class="input" rows="3">${esc((m.resolutions || []).join('\n'))}</textarea></div>
+  <div class="field"><label for="mnAc">Action items (one per line: task, who, by when)</label><textarea id="mnAc" name="actions" class="input" rows="3">${esc((m.actions || []).join('\n'))}</textarea></div>`;
+}
+const fdObj = fd => { const o = {}; fd.forEach((v, k) => { o[k] = v; }); return o; };
+function openMinForm(m) {
+  const wire = () => { const sel = $('#mnM'); if (!sel) return; const apply = () => { const g = S.v.meetings.find(x => x.id === sel.value), t = $('#mnT'), d = $('#mnD'); const lock = !!g; if (t) t.disabled = lock && !!g.typeId; if (d) d.readOnly = lock; if (!g) return; if (g.typeId && t && [...t.options].some(o => o.value === g.typeId)) t.value = g.typeId; if (d) d.value = g.date; const ti = $('#mnTi'); if (ti && !ti.value.trim()) ti.value = g.title; }; sel.addEventListener('change', apply); apply(); };
+  openModal({ title: m ? 'Edit minutes' : 'Write minutes', sub: 'Saved as a draft. Only you can change it until you submit it to the Chairman.', size: 'modal-lg', body: minForm(m), submit: 'Save draft',
+    onSubmit: fd => { const o = fdObj(fd); const tt = $('#mnT'); if (tt && tt.disabled) o.typeId = tt.value; const r = API.saveMinute(o, m && m.id); closeModal(); renderView(); toast('Draft saved.', 'ok'); setTimeout(() => ACTIONS['min-view']({ dataset: { id: r.id } }), 50); } });
+  wire();
+}
+async function minAudioBlock(m) {
+  const box = $('#minAudio'); if (!box) return; let blob = null; try { blob = m.audio ? await AUDIO.get(audioKey(m)) : null; } catch (_) {}
+  if (!blob) { box.innerHTML = m.audio ? '<p class="muted">The audio is stored on the device where it was recorded, and is not on this one.</p>' : '<p class="muted">No audio attached.</p>'; return; }
+  const url = URL.createObjectURL(blob); box.innerHTML = `<audio controls src="${url}" style="width:100%"></audio><div class="btn-row" style="margin-top:8px"><button class="btn btn-ghost btn-sm" type="button" data-act="min-audio-dl" data-id="${esc(m.id)}">Download audio</button></div>`;
+}
+Object.assign(ACTIONS, {
+  'min-new'() { if (!isSecretary()) throw new Error('Only the Secretary writes minutes.'); assertFeature('minutes', 'Meeting minutes'); openMinForm(null); },
+  'min-edit'(el) { const m = getMin(el.dataset.id); openMinForm(m); },
+  'min-view'(el) {
+    const m = getMin(el.dataset.id), sec = isSecretary(), chair = isChair(), ed = ['draft', 'rejected'].includes(m.status);
+    const sg = m.sigs || {}, sigH = s => s && s.img ? `<img class="sigprev" src="${esc(s.img)}" alt="Signature of ${esc(s.name)}">` : '<span class="muted">No signature uploaded</span>';
+    const bar = `<div class="btn-row" style="margin:12px 0"><button class="btn btn-primary btn-sm" type="button" data-act="min-pdf" data-id="${esc(m.id)}">Download PDF</button>
+      ${sec && ed ? `<button class="btn btn-ghost btn-sm" type="button" data-act="min-edit" data-id="${esc(m.id)}">Edit</button><button class="btn btn-leaf btn-sm" type="button" data-act="min-submit" data-id="${esc(m.id)}">Submit to the Chairman</button><button class="btn btn-ghost btn-sm" type="button" data-act="min-audio" data-id="${esc(m.id)}">${m.audio ? 'Replace audio' : 'Add audio'}</button><button class="btn btn-ghost btn-sm" type="button" data-act="min-del" data-id="${esc(m.id)}">Delete draft</button>` : ''}
+      ${chair && m.status === 'submitted' ? `<button class="btn btn-leaf btn-sm" type="button" data-act="min-approve" data-id="${esc(m.id)}">Approve</button><button class="btn btn-ghost btn-sm" type="button" data-act="min-reject" data-id="${esc(m.id)}">Return with a reason</button>` : ''}</div>`;
+    const ol = a => a.length ? `<ol>${a.map(x => `<li>${esc(x)}</li>`).join('')}</ol>` : '<p class="muted">None.</p>';
+    infoModal(m.title, `${esc(m.typeName)} | ${esc(fmtDate(m.date))}${m.venue ? ' | ' + esc(m.venue) : ''} | ${m.no ? esc(m.no) : 'Draft'}`,
+      `${MIN_BADGE[m.status]}${m.status === 'rejected' ? `<div class="callout warn"><div><b>Returned by the Chairman</b><p>${esc(m.rejectReason || '')}</p></div></div>` : ''}${bar}
+      <div class="sec-title">Attendance</div><p>${m.present && m.present.length ? `Present (${m.present.length}): ${esc(m.present.join(', '))}. ` : ''}${esc(m.attendNote || '')}${m.apologies ? ` Apologies: ${esc(m.apologies)}.` : ''}${!(m.present && m.present.length) && !m.attendNote && !m.apologies ? 'Not recorded.' : ''}</p>
+      <div class="sec-title">Agenda</div>${ol(m.agenda)}<div class="sec-title">Discussion</div><p style="white-space:pre-wrap">${esc(m.discussion || 'None.')}</p>
+      <div class="sec-title">Resolutions</div>${ol(m.resolutions)}<div class="sec-title">Action items</div>${ol(m.actions)}
+      <div class="sec-title">Audio</div><div id="minAudio"></div>
+      <div class="sec-title">Signatures</div><div class="btn-row"><div>${m.status === 'approved' ? sigH(sg.sec) : '<span class="muted">Added when approved</span>'}<small>${esc(m.writtenBy)}, Secretary</small></div><div>${m.status === 'approved' ? sigH(sg.chair) : '<span class="muted">Added when approved</span>'}<small>${esc(m.approvedBy || 'Chairman')}, Chairman</small></div></div>`);
+    minAudioBlock(m);
+  },
+  'min-submit'(el) { API.submitMinute(el.dataset.id); closeModal(); renderView(); toast('Submitted. The Chairman can now approve it.', 'ok'); },
+  'min-approve'(el) { const m = getMin(el.dataset.id); openModal({ title: 'Approve these minutes?', sub: `${esc(m.title)}. They will get their number, carry both signatures and can no longer be changed.${m.adminOnly ? ' Admins only: members will not see them.' : ' Members will be able to read them.'}`, body: '', submit: 'Approve minutes', onSubmit: () => { API.approveMinute(m.id); closeModal(); renderView(); toast('Minutes approved.', 'ok'); } }); },
+  'min-reject'(el) { const m = getMin(el.dataset.id); openModal({ title: 'Return the minutes', sub: 'The Secretary will see your reason and can correct them.', body: '<div class="field"><label for="mrR">What must be corrected?</label><textarea id="mrR" name="reason" class="input" rows="3" maxlength="300" required></textarea></div>', submit: 'Return to Secretary', onSubmit: fd => { API.rejectMinute(m.id, fd.get('reason')); closeModal(); renderView(); toast('Returned to the Secretary.', 'ok'); } }); },
+  'min-del'(el) { const m = getMin(el.dataset.id); openModal({ title: 'Delete this draft?', sub: esc(m.title), body: '', danger: true, submit: 'Delete draft', onSubmit: () => { API.deleteMinuteDraft(m.id); closeModal(); renderView(); toast('Draft deleted.', 'ok'); } }); },
+  async 'min-pdf'(el) { const m = getMin(el.dataset.id); download(`${S.v.code}-minutes-${m.date}-${(m.no || m.id).replace(/[^A-Za-z0-9]+/g, '-')}.pdf`, await minutePdf(m)); toast('Minutes downloaded.', 'ok'); },
+  'min-csv'() { requireAdmin(); const rows = [['Number', 'Id', 'Date', 'Title', 'Type', 'Status', 'Written by', 'Approved by', 'Resolutions']]; (S.v.minutes || []).forEach(m => rows.push([m.no || '', m.id, m.date, m.title, m.typeName, m.status, m.writtenBy, m.approvedBy || '', m.resolutions.join(' | ')])); csvDownload(`${S.v.code}-minutes.csv`, rows); },
+  async 'min-audio-dl'(el) { const m = getMin(el.dataset.id), b = await AUDIO.get(audioKey(m)); if (!b) return toast('No audio on this device.', 'err'); download(`${S.v.code}-minutes-${m.date}-audio.${/ogg/.test(b.type) ? 'ogg' : /mp4|aac|mpeg/.test(b.type) ? 'm4a' : 'webm'}`, b); },
+  'min-types'() {
+    if (!isLeadAdmin()) throw new Error('Only the Lead Admin edits meeting types.');
+    const row = t => `<div class="grid2 mtrow" style="align-items:end"><div class="field"><label>Name</label><input class="input mt-name" maxlength="50" value="${esc(t.name)}" data-id="${esc(t.id || '')}"></div><label class="check"><input type="checkbox" class="mt-exec"${t.exec ? ' checked' : ''}> Executive (admins only)</label></div>`;
+    openModal({ title: 'Meeting types', sub: 'Rename, add or remove types. Clear a name to remove it. Old minutes keep the name they were written under.', body: `<div id="mtRows">${mtypesLive().map(row).join('')}</div><button class="btn btn-ghost btn-sm" type="button" data-act="mt-add">Add a type</button>`, submit: 'Save types',
+      onSubmit: () => { API.saveMeetingTypes($$('#mtRows .mtrow').map(r => ({ id: $('.mt-name', r).dataset.id, name: $('.mt-name', r).value, exec: $('.mt-exec', r).checked }))); closeModal(); renderView(); toast('Meeting types saved.', 'ok'); } });
+    S._mtRow = row;
+  },
+  'mt-add'() { const d = document.createElement('div'); d.innerHTML = S._mtRow({ name: '', exec: false }); $('#mtRows').appendChild(d.firstChild); const i = $$('#mtRows .mt-name'); i[i.length - 1].focus(); },
+  'min-audio'(el) {
+    const m = getMin(el.dataset.id); recReset();
+    openModal({ title: 'Meeting audio', sub: esc(m.title), submit: 'Save audio', body: `<label class="check"><input type="checkbox" name="consent" required> Everyone present has been told this meeting is being recorded.</label>
+      <div class="btn-row" style="margin:10px 0"><button class="btn btn-ghost btn-sm" type="button" data-act="rec-start" id="recGo">Start recording</button><button class="btn btn-ghost btn-sm" type="button" data-act="rec-stop" id="recStop" disabled>Stop</button><span id="recT" class="muted">0:00</span></div>
+      <div class="field"><label for="mnF">Or choose an audio file</label><input id="mnF" name="file" type="file" accept="audio/*"></div><p class="hint">Audio stays in this browser on this device (up to 25 MB, recordings stop at 20 minutes). A backend will keep it safely later.</p><div id="recOut"></div>`,
+      onSubmit: async fd => {
+        if (!fd.get('consent')) throw new Error('Confirm that everyone present knows about the recording.');
+        let blob = REC.blob; const f = fd.get('file'); if (f && f.size) blob = f;
+        if (!blob) throw new Error('Record the meeting or choose an audio file first.');
+        if (blob.size > 25 * 1048576) throw new Error('That audio is over 25 MB. Record a shorter part or compress it.');
+        if (!/^audio\//.test(blob.type || '')) throw new Error('Choose an audio file.');
+        await AUDIO.put(audioKey(m), blob); const mm = (S.v.minutes || []).find(x => x.id === m.id); mm.audio = { size: blob.size, type: blob.type, at: stamp() }; log('Attached meeting audio', m.id, `${Math.round(blob.size / 1024)} KB`); commit(); recReset(); closeModal(); renderView(); toast('Audio saved.', 'ok');
+      } });
+  },
+  async 'rec-start'() {
+    try {
+      const st = await navigator.mediaDevices.getUserMedia({ audio: true }); recReset(); const r = new MediaRecorder(st); REC.rec = r; REC.chunks = []; REC.t0 = Date.now();
+      r.ondataavailable = e => { if (e.data && e.data.size) REC.chunks.push(e.data); };
+      r.onstop = () => { st.getTracks().forEach(t => t.stop()); REC.blob = new Blob(REC.chunks, { type: r.mimeType || 'audio/webm' }); const o = $('#recOut'); if (o) o.innerHTML = `<audio controls src="${URL.createObjectURL(REC.blob)}" style="width:100%"></audio>`; const g = $('#recGo'), s = $('#recStop'); if (g) g.disabled = false; if (s) s.disabled = true; clearInterval(REC.timer); };
+      r.start(1000); $('#recGo').disabled = true; $('#recStop').disabled = false;
+      REC.timer = setInterval(() => { const s = Math.floor((Date.now() - REC.t0) / 1000), t = $('#recT'); if (t) t.textContent = `${Math.floor(s / 60)}:${pad(s % 60)}`; if (s >= 1200) ACTIONS['rec-stop'](); }, 500);
+    } catch (e) { toast('The microphone could not be opened. You can choose an audio file instead.', 'err'); }
+  },
+  'rec-stop'() { try { if (REC.rec && REC.rec.state !== 'inactive') REC.rec.stop(); } catch (_) {} }
+});
+
+/* ---------- Meeting types drive the attendance register ---------- */
+(function linkRegisterToTypes() {
+  const open0 = API.openRegister;
+  API.openRegister = function (title, typeId) {
+    const m = open0.call(API, title);
+    const t = (typeId && mtypeOf(typeId)) || mtypesLive().find(x => x.name.toLowerCase() === String(title).trim().toLowerCase()) || null;
+    m.typeId = t ? t.id : ''; m.exec = !!(t && t.exec); if (t) m.typeName = t.name; commit(); return m;
+  };
+  ACTIONS['mtg-open'] = function () {
+    requireAdmin();
+    const types = mtypesLive(), first = types[0];
+    openModal({ title: "Open today's register", sub: 'Members can mark themselves present only while it is open, and only for today. You verify every name.',
+      body: `<div class="field"><label for="mtK">Meeting type</label><select id="mtK" name="typeId" class="input">${types.map(t => opt(t.id, t.name + (t.exec ? ' (executive, admins only)' : ''), first && first.id)).join('')}${opt('', 'Other (type a name)', '')}</select><span class="hint">The Lead Admin manages this list under Minutes, Meeting types. Executive meetings are hidden from ordinary members.</span></div>
+      <div class="field"><label for="mtT">Meeting name</label><input id="mtT" name="title" class="input" maxlength="60" value="${esc(first ? first.name : 'General meeting')}" required></div>
+      <div class="field"><label>Date</label><input class="input" value="${esc(fmtDate(today()))}" disabled><span class="hint">Registers open for today only. This stops anyone signing for a meeting that did not happen.</span></div>`, submit: 'Open register',
+      onSubmit: fd => { const t = (fd.get('title') || '').trim(); if (t.length < 3) throw new Error('Enter the meeting name.'); API.openRegister(t, fd.get('typeId')); closeModal(); renderView(); toast('Register is open. Members can now mark attendance.', 'ok'); } });
+    const sel = $('#mtK'), inp = $('#mtT');
+    sel.addEventListener('change', () => { const t = mtypeOf(sel.value); inp.value = t ? t.name : ''; inp.focus(); });
+  };
+})();
 
 /* ---------- Keep open tabs in step: when another tab (for example the admin verifying a payment) saves
    a village, this tab picks up the change by itself ---------- */
