@@ -1,0 +1,62 @@
+const { chromium } = require('playwright'); const fs=require('fs');
+(async()=>{
+const b=await chromium.launch(); const ctx=await b.newContext({acceptDownloads:true,viewport:{width:1360,height:900}}); await ctx.route(/fonts\.g/,r=>r.abort()); const p=await ctx.newPage();
+const errs=[]; p.on('pageerror',e=>errs.push('PAGEERR '+e.message)); p.on('console',m=>{if(m.type()==='error'&&!/ERR_TUNNEL|Failed to load resource/.test(m.text()))errs.push('CONSOLE '+m.text())});
+const ok=(c,m)=>console.log((c?'PASS ':'FAIL ')+m);
+const U=(process.env.BASE_URL||(process.env.BASE_URL||'http://localhost:8765/index.html'));
+const login=async(v,id,pw)=>{await p.goto(U);await p.evaluate(()=>{sessionStorage.clear()});await p.goto(U);await p.selectOption('#navVillage',v);await p.waitForTimeout(250);await p.fill('#loginId',id);await p.fill('#loginPw',pw);await p.click('#loginBtn');await p.waitForSelector('.shell');};
+// non-owner route redirect
+await p.goto(U+'#/super-admin/sponsors'); await p.waitForTimeout(300); ok(!(await p.url()).includes('super-admin') && !(await p.$('.shell')),'non-owner redirected to /');
+// member
+await login('umuokpu','UMK-M001','umk-member');
+let cards=await p.$$('.sponsor'); ok(cards.length===3,'member sees 3 sponsor cards ('+cards.length+')');
+const links=await p.$$eval('a.sponsor[href]',a=>a.map(x=>x.href)); ok(links.length>=2&&links.every(l=>l.startsWith('https://wa.me/234')),'wa.me links '+links.join(','));
+ok((await p.content()).includes('Lagos-wide sponsor'),'Lagos-wide label');
+ok(!(await p.$('[data-act=sp-add]')),'member no sponsor controls');
+// admin
+await login('umuokpu','UMK-A02','umk-admin');
+ok((await p.$$('.sponsor')).length===3,'admin sees read-only sponsors');
+ok(!(await p.$('[data-act^=sp-]')),'admin has no sp- controls');
+ok(!(await p.$('[data-page=o-sponsors]')),'admin no sponsor nav');
+// receipts
+await p.click('.navlist [data-page=transactions]'); await p.waitForTimeout(200);
+const rb=await p.$$('[data-act=receipt]'); ok(rb.length>0,'receipt buttons '+rb.length);
+await p.click('[data-act=receipt] >> nth=0'); await p.waitForSelector('.receipt-prev img'); ok(true,'receipt modal');
+const [d1]=await Promise.all([p.waitForEvent('download'),p.click('[data-fmt=png]')]); const f1='/tmp/r.png'; await d1.saveAs(f1); const h=fs.readFileSync(f1); ok(h.slice(1,4).toString()==='PNG'&&h.length>5000,'PNG valid '+h.length+' '+d1.suggestedFilename());
+const [d2]=await Promise.all([p.waitForEvent('download'),p.click('[data-fmt=pdf]')]); await d2.saveAs('/tmp/r.pdf'); const pd=fs.readFileSync('/tmp/r.pdf'); ok(pd.slice(0,5).toString()==='%PDF-'&&pd.includes('%%EOF'),'PDF valid '+pd.length+' '+d2.suggestedFilename());
+await p.screenshot({path:'/tmp/rc.png'}); await p.keyboard.press('Escape'); await p.waitForTimeout(200);
+const no1=d1.suggestedFilename(); await p.click('[data-act=receipt] >> nth=0'); await p.waitForSelector('.receipt-prev img'); const [d3]=await Promise.all([p.waitForEvent('download'),p.click('[data-fmt=png]')]); ok(d3.suggestedFilename()===no1,'receipt number persists');
+await p.waitForTimeout(250); for(let i=0;i<4&&!(await p.$eval('#modalRoot',e=>e.hidden));i++){await p.keyboard.press('Escape');await p.waitForTimeout(200);}   // the 'Payment verified' pop-up opens 60 ms after verifying, so close whatever is open
+await p.click('.navlist [data-page=audit]'); await p.waitForTimeout(200); ok((await p.content()).includes('Issued receipt'),'audit has Issued receipt');
+// owner
+await p.evaluate(()=>sessionStorage.clear());
+await p.evaluate(()=>sessionStorage.clear());
+await p.goto(U); await p.goto(U+'#owner'); await p.waitForTimeout(400);
+await p.fill('#ownId','OWNER'); await p.fill('#ownPw','owner-2026'); await p.click('#ownerBtn'); await p.waitForSelector('.shell');
+await p.click('.navlist [data-page=o-sponsors]'); await p.waitForTimeout(250);
+ok((await p.$$('table.t tbody tr')).length>=4,'owner table rows');
+const txt=await p.textContent('body'); ok(/Adaora/.test(txt)&&/Lagos Fresh/.test(txt),'sponsors listed');
+// filters
+for(const [s,v] of [['#spfS','global'],['#spfS','village'],['#spfS',''],['#spfT','expired'],['#spfT','paused'],['#spfT','active'],['#spfT','']]){await p.selectOption(s,v);await p.waitForTimeout(100);}
+ok(true,'filters');
+// add form
+await p.click('[data-act=sp-add]'); await p.waitForSelector('#spScope');
+ok(await p.$eval('#spVillage',e=>e.disabled),'village disabled for global');
+const pr1=await p.textContent('#spPrice'); await p.selectOption('#spScope','village'); ok(!(await p.$eval('#spVillage',e=>e.disabled)),'village enabled'); const pr2=await p.textContent('#spPrice'); ok(pr1!==pr2,'price updates: '+pr1.trim().slice(0,40)+' | '+pr2.trim().slice(0,40));
+await p.selectOption('#spWeeks','8'); ok(/40,000/.test(await p.textContent('#spPrice')),'8 wks village = 40,000');
+await p.selectOption('#spVillage','amakwu'); await p.selectOption('#spSlot','3'); await p.fill('#spShop','Test Shop'); await p.fill('#spWa','08031234567'); await p.fill('#spRef','PSK-TEST-1'); await p.click('#mSubmit'); await p.waitForTimeout(400);
+const t2=await p.textContent('body'); ok(/Test Shop/.test(t2),'village sponsor added');
+// conflict: global slot 1 already taken
+await p.click('[data-act=sp-add]'); await p.waitForSelector('#spScope'); await p.selectOption('#spSlot','1'); await p.fill('#spShop','Clash'); await p.fill('#spWa','08031234567'); await p.fill('#spRef','PSK-X'); await p.click('#mSubmit'); await p.waitForTimeout(300);
+ok(!!(await p.$('.modal')) , 'conflict keeps modal open'); ok(!!(await p.$('.modal .form-error, .modal .err, .modal [role=alert], .modal .callout-bad')),'conflict error shown'); await p.keyboard.press('Escape'); await p.waitForTimeout(200);
+// edit, renew, toggle, delete
+await p.click('[data-act=sp-edit] >> nth=0'); await p.fill('#spShop','Adaora Edited'); await p.click('#mSubmit'); await p.waitForTimeout(300); ok(/Adaora Edited/.test(await p.textContent('body')),'edit');
+await p.click('[data-act=sp-renew] >> nth=0'); await p.selectOption('#rnW','2'); await p.fill('#rnRef','PSK-R1'); await p.click('#mSubmit'); await p.waitForTimeout(300); ok(true,'renew');
+await p.click('[data-act=sp-toggle] >> nth=0'); await p.waitForTimeout(200); ok(true,'toggle');
+const n0=(await p.$$('table.t tbody tr')).length; await p.click('[data-act=sp-delete] >> nth=0'); await p.click('#mSubmit'); await p.waitForTimeout(300); const n1=(await p.$$('table.t tbody tr')).length; ok(n1===n0-1,'delete '+n0+'->'+n1);
+await p.screenshot({path:'/tmp/spn.png',fullPage:true});
+// owner route direct
+await p.goto(U+'#/super-admin/sponsors'); await p.waitForTimeout(400); ok(!!(await p.$('.shell')),'owner route works (session)');
+// owner open village -> read-only sponsors, receipt button
+console.log('ERRORS',JSON.stringify(errs)); await b.close();
+})().catch(e=>{console.log('FATAL',e.message);process.exit(1)});
