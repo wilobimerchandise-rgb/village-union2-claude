@@ -2647,7 +2647,7 @@ function capNotice() {
 }
 function upgradeModal() {
   infoModal('Upgrade to Premium', 'Your Basic plan is full', `<div class="upgrade-box"><div class="up-badge">${premiumBadge}</div><p>The Basic plan covers up to <b>${MEMBER_CAP} members</b> and you have ${activeMembers()}. Premium removes the limit and adds:</p>
-  <ul class="ticks"><li>No member limit</li><li>Professional letterhead receipts with the Chairman and Financial Secretary signatures</li><li>Your village name, code and logo on every document</li><li>One-click WhatsApp broadcast to members who owe</li><li>No VillageVault watermark on documents</li></ul><p class="hint">Ask VillageVault support to move your village or association to Premium. Your records stay exactly as they are.</p></div>`);
+  <ul class="ticks"><li>No member limit</li><li>Professional letterhead receipts with the Chairman and Financial Secretary signatures</li><li>Your village name, code and logo on every document</li><li>One-click WhatsApp broadcast to members who owe</li><li>Meeting minutes: the Secretary writes, the Chairman approves, both sign</li><li>No VillageVault watermark on documents</li></ul><p class="hint">Ask VillageVault support to move your village or association to Premium. Your records stay exactly as they are.</p></div>`);
 }
 Object.assign(ACTIONS, { 'upgrade-info'() { upgradeModal(); } });
 /* =========================================================
