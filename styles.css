@@ -582,3 +582,17 @@ h1#pageTitle:focus{outline:none}
 .vz-table{margin-top:12px}.vz-table summary{cursor:pointer;color:var(--viz-muted);font-size:.85rem;font-weight:600}
 .vz-tip{position:fixed;z-index:1000;pointer-events:none;background:#14142B;color:#fff;padding:8px 12px;border-radius:10px;font-size:.82rem;line-height:1.4;box-shadow:0 8px 24px rgba(0,0,0,.25);max-width:260px}
 @media (max-width:640px){.vz-row{grid-template-columns:1fr 44px}.vz-row .vz-track{grid-column:1/-1;grid-row:2}.vz-row .vz-lab{grid-column:1}.vz-row .vz-val{grid-column:2;grid-row:1}}
+
+/* ---------- Plans and language (round 11) ---------- */
+.plan-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;max-width:860px}
+.plan-card{background:#fff;border:1px solid var(--line);border-radius:var(--r-panel);padding:26px;box-shadow:var(--shadow)}
+.plan-card h3{font-size:1.4rem;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.plan-card .plan-for{color:var(--muted);margin:6px 0 16px}
+.plan-premium{border:2px solid var(--saffron)}
+.plan-flag{font-size:.72rem;font-weight:700;background:var(--amber-bg);color:#7A5200;border-radius:999px;padding:3px 10px}
+.plan-note{margin-top:20px;color:var(--muted)}
+.plan-table td.yes{color:var(--leaf);font-weight:600}
+.plan-table td.no{color:var(--muted)}
+
+.vcard-wings{cursor:default}.vcard-wings:hover{transform:none}.vwings{display:flex;gap:8px;flex-wrap:wrap;margin-top:auto;padding-left:6px}.vwing{font:inherit;font-weight:600;font-size:.84rem;border:1px solid var(--vc,var(--indigo));background:#fff;color:#14142B;border-radius:999px;padding:7px 12px;min-height:38px;cursor:pointer}.vwing:hover,.vwing:focus-visible{background:var(--vc,var(--indigo));color:#fff}
+.lvl{height:10px;border-radius:6px;background:#e8e8f0;overflow:hidden;margin:10px 0 4px}.lvl i{display:block;height:100%;width:0;background:var(--leaf,#2E7D32);transition:width .12s}
