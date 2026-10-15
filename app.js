@@ -358,7 +358,7 @@ const API = {
     log('Voided payment record', t.id, `${levyOf(t.levy).name} ${money(t.amount)} for ${nameOf(t.memberId)}: ${reason}`); commit(); return t;
   },
   addMember(d) {
-    requireAdmin(); if (capReached()) throw new Error('The Basic plan covers up to 20 members. Upgrade to Premium to add more.');
+    requireAdmin(); if (capReached()) throw new Error(`The Basic plan covers up to ${basicCap()} members here. Upgrade to Premium to add more.`);
     const id = nextId('mbr', 'M'); return hashPw(S.v.id, id, d.password).then(h => {
       const u = { id, name: d.name, role: 'member', title: 'Member', family: d.family || '', kindred: d.kindred || '', phone: d.phone, email: d.email || '', joined: today(), active: true, hash: h, mustChange: true, tempPw: d.password, createdBy: S.u.name, createdAt: stamp() };
       S.v.users.push(u); S.v.credLog.push({ memberId: id, by: S.u.name, at: stamp(), kind: 'issued' }); log('Added member', id, `${u.name}${kinOf(u) ? ' (' + kinOf(u) + ')' : ''}`); commit(); return u;
@@ -488,7 +488,11 @@ const methodOpts = sel => METHODS.map(m => opt(m, m, sel)).join('');
 const isVillageType = () => !S.v || S.v.type !== 'association';
 const kinOf = u => [u && u.family, u && u.kindred].filter(Boolean).join(', ');
 const kindredOpts = (sel, all) => (all ? opt('', all, sel) : '') + Array.from(new Set(S.v.users.map(u => u.kindred).filter(Boolean))).sort().map(k => opt(k, k, sel)).join('');
-const MEMBER_CAP = 20, activeMembers = () => S.v.users.filter(u => u.role === 'member' && u.active).length, capReached = () => S.v.plan !== 'premium' && activeMembers() >= MEMBER_CAP;
+/* Basic plan: a village has 20 members in total, 10 in the Men's Wing and 10 in the Women's Wing. An association has 10 and no wings. */
+const MEMBER_CAP = 20, WING_CAP = 10, ASSOC_CAP = 10;
+const basicCap = () => (S.v && S.v.type === 'association') ? ASSOC_CAP : (S.v && S.v.wing) ? WING_CAP : MEMBER_CAP;
+const activeMembers = () => S.v.users.filter(u => u.role === 'member' && u.active).length, capReached = () => S.v.plan !== 'premium' && activeMembers() >= basicCap();
+const capWords = () => (S.v && S.v.type === 'association') ? `${ASSOC_CAP} members` : (S.v && S.v.wing) ? `${WING_CAP} members in each wing` : `${MEMBER_CAP} members, ${WING_CAP} in each wing`;
 const memberOpts = (sel, all, onlyActive) => (all ? opt('', all, sel) : '') + S.v.users.filter(u => u.role === 'member' && (!onlyActive || u.active || u.id === sel)).map(u => opt(u.id, `${u.name} (${u.id})`, sel)).join('');
 function yearOpts(sel, all) {
   const ys = new Set([new Date().getFullYear()]); S.v.tx.forEach(t => ys.add(yearOf(t.date))); S.v.expenses.forEach(e => ys.add(yearOf(e.date)));
@@ -766,10 +770,10 @@ function downloadReport(kind, year, month, memberId) {
 /* ---------- Shell and navigation ---------- */
 const NAV = {
   member: [['overview', 'My dashboard', 'home'], ['village', 'Village dashboard', 'village'], ['achievements', 'My achievements', 'check'], ['halloffame', 'Sponsors hall of fame', 'coin'], ['minutes', 'Minutes', 'book']],
-  admin: [['overview', 'Overview', 'home'], ['verify', 'Verify payments', 'check'], ['transactions', 'Transactions', 'list'], ['outstanding', 'Outstanding bills', 'coin'], ['pledges', 'Pledges', 'coin'], ['members', 'Members', 'users'], ['admins', 'Admins and duties', 'users'], ['register', 'Register', 'book'], ['minutes', 'Minutes', 'book'], ['expenses', 'Expenditure', 'coin'], ['levies', 'Levy categories', 'sliders'], ['profile', 'Village profile', 'village'], ['reports', 'Reports', 'file'], ['audit', 'Activity log', 'clock'], ['achievements', 'My achievements', 'check'], ['halloffame', 'Sponsors hall of fame', 'coin']],
+  admin: [['overview', 'Overview', 'home'], ['verify', 'Verify payments', 'check'], ['transactions', 'Transactions', 'list'], ['outstanding', 'Outstanding bills', 'coin'], ['pledges', 'Pledges', 'coin'], ['members', 'Members', 'users'], ['admins', 'Admins and duties', 'users'], ['register', 'Register', 'book'], ['minutes', 'Minutes', 'book'], ['plans', 'Plans', 'coin'], ['expenses', 'Expenditure', 'coin'], ['levies', 'Levy categories', 'sliders'], ['profile', 'Village profile', 'village'], ['reports', 'Reports', 'file'], ['audit', 'Activity log', 'clock'], ['achievements', 'My achievements', 'check'], ['halloffame', 'Sponsors hall of fame', 'coin']],
   owner: [['o-overview', 'All villages', 'home'], ['o-villages', 'Manage villages', 'village'], ['o-admins', 'Village admins', 'users'], ['o-sponsors', 'Sponsors', 'coin'], ['o-insights', 'Insights', 'list'], ['o-reviews', 'Reviews', 'check'], ['o-log', 'Owner activity', 'clock'], ['o-account', 'My account', 'user']]
 };
-const TITLES = { overview: 'Overview', village: 'Village dashboard', reports: 'Reports', verify: 'Verify payments', transactions: 'Transactions', members: 'Members', expenses: 'Expenditure', levies: 'Levy categories', outstanding: 'Outstanding bills', pledges: 'Pledges', admins: 'Admins and duties', achievements: 'My achievements', halloffame: 'Sponsors hall of fame', minutes: 'Meeting minutes', 'o-insights': 'Insights', 'o-reviews': 'Reviews', register: 'Register', profile: 'Village profile', audit: 'Activity log', 'o-overview': 'All villages', 'o-villages': 'Manage villages', 'o-admins': 'Village admins', 'o-sponsors': 'Sponsors', 'o-log': 'Owner activity', 'o-account': 'My account' };
+const TITLES = { overview: 'Overview', village: 'Village dashboard', reports: 'Reports', verify: 'Verify payments', transactions: 'Transactions', members: 'Members', expenses: 'Expenditure', levies: 'Levy categories', outstanding: 'Outstanding bills', pledges: 'Pledges', admins: 'Admins and duties', achievements: 'My achievements', halloffame: 'Sponsors hall of fame', minutes: 'Meeting minutes', plans: 'Plans and Premium', 'o-insights': 'Insights', 'o-reviews': 'Reviews', register: 'Register', profile: 'Village profile', audit: 'Activity log', 'o-overview': 'All villages', 'o-villages': 'Manage villages', 'o-admins': 'Village admins', 'o-sponsors': 'Sponsors', 'o-log': 'Owner activity', 'o-account': 'My account' };
 const inOwnerConsole = () => S.owner && !S.v;
 const roleKey = () => inOwnerConsole() ? 'owner' : (isAdmin() ? 'admin' : 'member');
 function pageTitleText() {
@@ -793,6 +797,8 @@ function renderApp() {
         <div class="who"><div class="avatar">${esc(initials(who.n))}</div><div><b>${esc(who.n)}</b><small>${esc(who.s)}</small></div></div>
         ${S.owner && S.v ? '<button class="btn-out" type="button" data-act="owner-back">Back to owner console</button>' : ''}
         <button class="btn-out" type="button" data-act="change-pw">Change password</button>
+        ${S.v && !S.owner && S.u && S.u.id !== 'SUPPORT' ? '<button class="btn-out" type="button" data-act="change-username">Change username</button>' : ''}
+        ${S.v && !S.owner && S.u && S.u.id !== 'SUPPORT' ? '<button class="btn-out" type="button" data-act="bio-manage">Fingerprint or face sign-in</button>' : ''}
         ${S.v && !S.owner && rememberedFor(S.v.id) ? '<button class="btn-out" type="button" data-act="forget-device">Forget this device</button>' : ''}
         <button class="btn-out" type="button" data-act="logout">${icon('out')}Sign out</button>
       </div>
@@ -1151,10 +1157,13 @@ function changePwModal(force) {
 
 /* ---------- Village access (landing page) ---------- */
 let attempts = 0, lockUntil = 0;
-function villageSelectHTML(sel) { return `<option value="" disabled${sel ? '' : ' selected'}>Select your village or association</option>` + liveVillages().flatMap(v => [v, ...wingsOf(v)]).map(v => opt(v.id, `${v.wing ? '\u00A0\u00A0\u21B3 ' : ''}${v.name} (${v.code})`, sel)).join(''); }
+function villageSelectHTML(sel) { return `<option value="" disabled${sel ? '' : ' selected'}>Select your village or association</option>` + signInList().map(v => opt(v.id, `${v.name} (${v.code})`, sel)).join(''); }
 function fillVillageSelects() {
   $$('[data-village-select]').forEach(s => { s.innerHTML = villageSelectHTML(''); });
-  const nav = $('#navVillage'); if (nav) nav.options[0].textContent = 'Village or association'; const g = $('#villageGrid'); if (g) g.innerHTML = liveVillages().map(v => `<button type="button" class="vcard" style="--vc:${v.color}" data-act="pick-village" data-village="${v.id}"><b>${esc(v.name)}</b><span>${esc(v.code)}, ${esc(v.tag)}</span><em>Open this village</em></button>`).join('');
+  const nav = $('#navVillage'); if (nav) nav.options[0].textContent = 'Village or association'; const g = $('#villageGrid'); if (g) g.innerHTML = liveVillages().map(v => {
+    if (v.type === 'association') return `<button type="button" class="vcard" style="--vc:${v.color}" data-act="pick-village" data-village="${v.id}"><b>${esc(v.name)}</b><span>${esc(v.code)}, ${esc(v.tag)}</span><em>Open this association</em></button>`;
+    const w = activeWings(v); if (!w.length) return '';
+    return `<div class="vcard vcard-wings" style="--vc:${v.color}"><b>${esc(v.name)}</b><span>${esc(v.code)}, ${esc(v.tag)}</span><div class="vwings">${w.map(x => `<button type="button" class="vwing" data-act="pick-village" data-village="${x.id}">${esc(wingLabel(x.wing))}</button>`).join('')}</div></div>`; }).join('');
 }
 function pickVillage(id) {
   const v = vilById(id); if (!v) return;
@@ -1204,7 +1213,7 @@ async function doLogin(e) {
   const btn = $('#loginBtn'); btn.disabled = true; btn.textContent = 'Opening...';
   try {
     const vil = vilById(vid); if (!vil || vil.removed) throw new Error('This village or association is no longer on VillageVault. Contact your admin.');
-    const v = await DB.load(vid), u = v.users.find(x => x.id === uid), h = u ? await hashPw(vid, u.id, pw) : null;
+    const v = await DB.load(vid), u = v.users.find(x => x.id === uid || (x.username && x.username.toUpperCase() === uid)), h = u ? await hashPw(vid, u.id, pw) : null;
     if (!u || u.hash !== h) {
       fs.n = (fs.n || 0) + 1;
       if (fs.n >= CONFIG.MAX_ATTEMPTS) { fs.n = 0; fs.until = Date.now() + CONFIG.LOCK_SECONDS * 1000; ssSet(failKey(vid, uid), JSON.stringify(fs)); throw new Error(CONTACT_MSG); }
@@ -1402,19 +1411,19 @@ const vDot = vil => `<span class="dot" style="background:${vil.color}"></span>`;
 
 const OWNERV = {
   'o-overview'() {
-    const rows = VILLAGES.map(vil => ({ vil, v: DB.cache[vil.id] })).filter(r => r.v).map(r => Object.assign(r, { st: vStats(r.v) })), yr = new Date().getFullYear();
+    const rows = VILLAGES.map(vil => ({ vil, v: DB.cache[vil.id] })).filter(r => r.v).map(r => Object.assign(r, { st: aggStats(r.vil) })), yr = new Date().getFullYear();
     const tot = k => rows.reduce((a, r) => a + r.st[k], 0), live = rows.filter(r => r.v.status !== 'suspended' && !r.vil.removed).length;
     return `${OWN.data.defaultPw ? `<div class="owner-banner"><div><b>Change the default owner password.</b> Anyone who knows it can open every village.</div><button class="btn btn-saffron btn-sm" type="button" data-act="change-pw">Change password</button></div>` : ''}
     <div class="kpis">${kpi('Collected in ' + yr, money(tot('collected')), 'All villages together', 'hot')}${kpi('Waiting for verification', String(tot('pending')), money(tot('pendingAmt')))}${kpi('Active members', String(tot('members')), `${tot('admins')} active admins`)}${kpi('Villages open', `${live} of ${rows.length}`, live < rows.length ? 'Some villages are paused' : 'All villages running')}</div>
     <section class="panel"><div class="panel-h"><div><h2>Collections by village in ${yr}</h2><p>Verified payments only</p></div></div>${barChart(rows.map(r => ({ label: r.vil.code, title: r.v.name, value: r.st.collected })))}</section>
     ${plansPanel(rows)}
     <section class="panel"><div class="panel-h"><div><h2>Every village at a glance</h2><p>Open any village to work in it with full admin control.</p></div></div>
-    ${table(['Village', { t: 'Members', num: true }, { t: 'Collected ' + yr, num: true }, { t: 'Spent ' + yr, num: true }, { t: 'Balance', num: true }, { t: 'Waiting', num: true }, 'Plan', 'Status', ''], rows.map(r => [`${vDot(r.vil)}${esc(r.v.name)}<small>${esc(r.vil.code)}</small>`, String(r.st.members), money(r.st.collected), money(r.st.spent), money(r.st.balance), String(r.st.pending), planBadge(r.v), statusBadge(r.v), `<div class="actions"><button class="btn btn-primary btn-sm" type="button" data-act="owner-open" data-id="${r.vil.id}">Open dashboard</button><button class="btn btn-ghost btn-sm" type="button" data-act="owner-manage" data-id="${r.vil.id}">Manage</button></div>`]), ['No villages loaded', ''])}</section>`;
+    ${table(['Village', { t: 'Members', num: true }, { t: 'Collected ' + yr, num: true }, { t: 'Spent ' + yr, num: true }, { t: 'Balance', num: true }, { t: 'Waiting', num: true }, 'Plan', 'Status', ''], rows.map(r => [`${vDot(r.vil)}${esc(r.v.name)}<small>${esc(r.vil.code)}</small>`, String(r.st.members), money(r.st.collected), money(r.st.spent), money(r.st.balance), String(r.st.pending), planBadge(r.v), statusBadge(r.v), `<div class="actions">${r.vil.type === 'association' ? `<button class="btn btn-primary btn-sm" type="button" data-act="owner-open" data-id="${r.vil.id}">Open dashboard</button>` : activeWings(r.vil).map(w => `<button class="btn btn-primary btn-sm" type="button" data-act="owner-open" data-id="${w.id}">${esc(wingLabel(w.wing))}</button>`).join('')}<button class="btn btn-ghost btn-sm" type="button" data-act="owner-manage" data-id="${r.vil.id}">Manage</button></div>`]), ['No villages loaded', ''])}</section>`;
   },
   'o-villages'() {
     const rows = VILLAGES.map(vil => ({ vil, v: DB.cache[vil.id] })).filter(r => r.v);
     return `<section class="panel"><div class="panel-h"><div><h2>Villages and associations</h2><p>Edit the name or plan, restrict access, or remove one from the platform. Nothing is erased: a removed village can be restored.</p></div></div>
-    ${table(['Village or association', 'Code', 'Plan', { t: 'Admins', num: true }, { t: 'Members', num: true }, 'Access', ''], rows.map(r => { const st = vStats(r.v); return [`${vDot(r.vil)}${esc(r.v.name)}`, esc(r.vil.code), planBadge(r.v), String(st.admins), String(st.members), statusBadge(r.v), `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="owner-manage" data-id="${r.vil.id}">Edit or restrict</button>${r.vil.removed ? `<button class="btn btn-leaf btn-sm" type="button" data-act="owner-restore" data-id="${r.vil.id}">Restore</button>` : `<button class="btn btn-danger btn-sm" type="button" data-act="owner-remove" data-id="${r.vil.id}">Remove</button>`}<button class="btn btn-ghost btn-sm" type="button" data-act="owner-admins" data-id="${r.vil.id}">Admins</button><button class="btn btn-primary btn-sm" type="button" data-act="owner-open" data-id="${r.vil.id}">Open</button></div>`]; }), ['No villages', ''])}</section>`;
+    ${table(['Village or association', 'Code', 'Plan', { t: 'Admins', num: true }, { t: 'Members', num: true }, 'Access', ''], rows.map(r => { const st = aggStats(r.vil); return [`${vDot(r.vil)}${esc(r.v.name)}${r.vil.type === 'association' ? '<small>No wings</small>' : `<small>${['men', 'women'].map(k => wingLabel(k) + (wingOn(r.vil, k) ? ' on' : ' off')).join(' · ')}</small>`}`, esc(r.vil.code), planBadge(r.v), String(st.admins), String(st.members), statusBadge(r.v), `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="owner-manage" data-id="${r.vil.id}">Edit or restrict</button>${r.vil.type === 'association' ? '' : `<button class="btn btn-ghost btn-sm" type="button" data-act="owner-wings" data-id="${r.vil.id}">Wings</button>`}${r.vil.removed ? `<button class="btn btn-leaf btn-sm" type="button" data-act="owner-restore" data-id="${r.vil.id}">Restore</button>` : `<button class="btn btn-danger btn-sm" type="button" data-act="owner-remove" data-id="${r.vil.id}">Remove</button>`}<button class="btn btn-ghost btn-sm" type="button" data-act="owner-admins" data-id="${r.vil.id}">Admins</button><button class="btn btn-primary btn-sm" type="button" data-act="owner-open" data-id="${r.vil.id}">Open</button></div>`]; }), ['No villages', ''])}</section>`;
   },
   'o-admins'() {
     const f = S.f, vid = f.village || VILLAGES[0].id, v = DB.cache[vid], admins = v.users.filter(u => u.role === 'admin');
@@ -1448,6 +1457,11 @@ Object.assign(ACTIONS, {
       <div class="field"><label for="omPl">Plan</label><select id="omPl" name="plan" class="select">${opt('basic', 'Basic', v.plan)}${opt('premium', 'Premium (receipts carry the village name and logo)', v.plan)}</select></div></div>
       <div class="field"><label for="omNote">Note for your log (optional)</label><input id="omNote" name="note" class="input" maxlength="120"></div>`, submit: 'Save changes',
       onSubmit: fd => { const n = (fd.get('name') || '').trim(); if (n.length < 2) throw new Error('Enter a village name.'); OWNER_API.manageVillage(v.id, { name: n, status: fd.get('status'), plan: fd.get('plan'), note: (fd.get('note') || '').trim() }); fillVillageSelects(); done('Village updated.'); } });
+  },
+  'owner-wings'(el) {
+    const vil = VILLAGES.find(x => x.id === el.dataset.id), sel = k => `<div class="field"><label for="ow${k}">${esc(wingLabel(k))}</label><select id="ow${k}" name="${k}" class="select">${opt('on', 'On: members can sign in', wingOn(vil, k) ? 'on' : 'off')}${opt('off', 'Off: hidden from sign-in, records kept', wingOn(vil, k) ? 'on' : 'off')}</select></div>`;
+    openModal({ title: `Wings of ${vil.name}`, sub: 'Add or remove a wing. Switching a wing off hides it from the sign-in list; nothing is erased and you can switch it on again.', body: `<div class="form-row">${sel('men')}${sel('women')}</div>`, submit: 'Save wings',
+      onSubmit: fd => { let n = 0; ['men', 'women'].forEach(k => { const on = fd.get(k) === 'on'; if (wingOn(vil, k) !== on) { OWNER_API.setWing(vil.id, k, on); n++; } }); if (!n) throw new Error('Nothing was changed.'); fillVillageSelects(); done('Wings saved.'); } });
   },
   'owner-remove'(el) {
     const v = DB.cache[el.dataset.id];
@@ -2582,10 +2596,10 @@ Object.assign(OWNER_API, {
 });
 const OADM = v => v.users.filter(u => u.role === 'admin').sort((a, b) => (b.lead ? 1 : 0) - (a.lead ? 1 : 0) || a.id.localeCompare(b.id));
 OWNERV['o-admins'] = function () {
-  const f = S.f, vid = tenantList().some(x => x.id === f.village) ? f.village : VILLAGES[0].id, v = DB.cache[vid], admins = OADM(v), lead = admins.find(u => u.lead), roles = getRoles();
+  const f = S.f, vid = tenantList().some(x => x.id === f.village) ? f.village : tenantList()[0].id, v = DB.cache[vid], admins = OADM(v), lead = admins.find(u => u.lead), roles = getRoles();
   const held = r => Object.values(DB.cache).reduce((a, x) => a + x.users.filter(u => u.role === 'admin' && u.title === r).length, 0);
   return `<section class="panel"><div class="panel-h"><div><h2>Admins of a village</h2><p>Create, appoint and remove admins in any village or association. Each role can be held by one person per village.</p></div><div class="btn-row"><button class="btn btn-ghost btn-sm" type="button" data-act="o-appoint" data-id="${esc(vid)}">Appoint a member</button><button class="btn btn-primary btn-sm" type="button" data-act="o-add-admin" data-id="${esc(vid)}">Add new admin</button></div></div>
-    <div class="toolbar"><div class="field"><label for="oaV">Village or association</label><select id="oaV" class="select" data-filter="village">${tenantList().map(x => opt(x.id, `${x.wing ? '\u00A0\u00A0\u21B3 ' : ''}${x.name} (${x.code})`, vid)).join('')}</select></div></div>
+    <div class="toolbar"><div class="field"><label for="oaV">Village or association</label><select id="oaV" class="select" data-filter="village">${tenantList().map(x => opt(x.id, `${x.name} (${x.code})`, vid)).join('')}</select></div></div>
     <div class="callout${lead ? ' ok' : ''}"><div><b>Lead Admin: ${lead ? esc(lead.name) + ' (' + esc(lead.id) + ')' : 'none assigned'}</b><p>The Lead Admin appoints admins and assigns their duties inside the village. Only you can change who it is.</p></div><div class="btn-row"><button class="btn btn-primary btn-sm" type="button" data-act="o-lead" data-v="${esc(vid)}">${lead ? 'Change Lead Admin' : 'Assign Lead Admin'}</button>${lead ? `<button class="btn btn-ghost btn-sm" type="button" data-act="o-unlead" data-v="${esc(vid)}">Remove Lead Admin</button>` : ''}</div></div>
     ${table(['Admin', 'Role', 'Phone', 'Account', ''], admins.map(a => [`${esc(a.name)}<small>${esc(a.id)}${a.lead ? ' · Lead Admin' : ''}</small>`, esc(a.title || '-'), esc(a.phone || '-'), a.active ? '<span class="badge b-active">Active</span>' : '<span class="badge b-off">Deactivated</span>', `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="o-edit-admin" data-v="${esc(vid)}" data-id="${esc(a.id)}">Edit</button><button class="btn btn-ghost btn-sm" type="button" data-act="o-reset-admin" data-v="${esc(vid)}" data-id="${esc(a.id)}">Reset password</button>${a.lead ? '' : `<button class="btn btn-ghost btn-sm" type="button" data-act="o-lead" data-v="${esc(vid)}" data-id="${esc(a.id)}">Make Lead</button>`}${a.totp ? `<button class="btn btn-ghost btn-sm" type="button" data-act="o-reset-2fa" data-v="${esc(vid)}" data-id="${esc(a.id)}">Reset 2-step</button>` : ''}<button class="btn btn-ghost btn-sm" type="button" data-act="o-remove-admin" data-v="${esc(vid)}" data-id="${esc(a.id)}">Remove</button></div>`]), ['This village has no admins', 'Add one so the village can verify payments.'])}</section>
   <section class="panel"><div class="panel-h"><div><h2>Admin roles</h2><p>Only you can create or remove roles. They apply to every village and association.</p></div><button class="btn btn-primary btn-sm" type="button" data-act="o-add-role">Create a role</button></div>
@@ -2622,7 +2636,7 @@ Object.assign(ACTIONS, {
       body: `<div class="form-row"><div class="field"><label for="avN">Name</label><input id="avN" name="name" class="input" maxlength="40" required></div><div class="field"><label for="avC">Code (2 to 5 letters or numbers)</label><input id="avC" name="code" class="input mono" maxlength="5" style="text-transform:uppercase" required></div></div>
       <div class="form-row"><div class="field"><label for="avY">Category</label><select id="avY" name="type" class="select">${opt('village', 'Village (members have family and kindred names)', 'village')}${opt('association', 'Association (no family or kindred)', 'village')}</select></div><div class="field"><label for="avP">Plan</label><select id="avP" name="plan" class="select">${opt('basic', 'Basic', 'basic')}${opt('premium', 'Premium', 'basic')}</select></div><div class="field"><label for="avL">Lead Admin full name</label><input id="avL" name="leadName" class="input" maxlength="80" required></div></div>
       <div class="form-row"><div class="field"><label for="avT">Lead Admin phone</label><input id="avT" name="phone" class="input" type="tel" maxlength="20"></div><div class="field"><label for="avW">Starting password</label><input id="avW" name="password" class="input" type="text" value="${pw}" minlength="6" required></div></div>`, submit: 'Add village',
-      onSubmit: async fd => { const r = await OWNER_API.addVillage({ name: fd.get('name'), code: fd.get('code'), type: fd.get('type'), plan: fd.get('plan'), leadName: fd.get('leadName'), phone: fd.get('phone'), password: fd.get('password') }); fillVillageSelects(); done(`Added. The Lead Admin signs in with ${r.uid}.`); } });
+      onSubmit: async fd => { const r = await OWNER_API.addVillage({ name: fd.get('name'), code: fd.get('code'), type: fd.get('type'), plan: fd.get('plan'), leadName: fd.get('leadName'), phone: fd.get('phone'), password: fd.get('password') }); fillVillageSelects(); done(r.wingIds && r.wingIds.length ? `Added. The Lead Admin signs in with ${r.wingIds.map(x => x.uid + ' (' + x.label + ')').join(' and ')}.` : `Added. The Lead Admin signs in with ${r.uid}.`); } });
   },
   'o-delete-village'(el) {
     const vil = VILLAGES.find(x => x.id === el.dataset.id);
@@ -2640,13 +2654,13 @@ function membershipStrip() {
 const premiumBadge = '<span class="badge b-admin">Premium</span>';
 function capNotice() {
   if (S.v.plan === 'premium') return '';
-  const n = activeMembers(), left = MEMBER_CAP - n;
-  if (n >= MEMBER_CAP) return `<div class="callout upgrade"><div><b>${premiumBadge} You have reached the Basic plan limit of ${MEMBER_CAP} members</b><p>${n} active members. Upgrade to Premium to add more members, and to get the letterhead receipts, village profile on every document and one-click WhatsApp broadcast.</p></div><button class="btn btn-saffron btn-sm" type="button" data-act="upgrade-info">How to upgrade</button></div>`;
-  if (left <= 3) return `<div class="callout upgrade"><div><b>${premiumBadge} ${left} member place${left === 1 ? '' : 's'} left on the Basic plan</b><p>Basic covers up to ${MEMBER_CAP} members. Upgrade to Premium before you reach the limit.</p></div><button class="btn btn-ghost btn-sm" type="button" data-act="upgrade-info">How to upgrade</button></div>`;
+  const n = activeMembers(), CAP = basicCap(), left = CAP - n;
+  if (n >= CAP) return `<div class="callout upgrade"><div><b>${premiumBadge} You have reached the Basic plan limit of ${CAP} members</b><p>${n} active members. Upgrade to Premium to add more members, and to get the letterhead receipts, village profile on every document and one-click WhatsApp broadcast.</p></div><button class="btn btn-saffron btn-sm" type="button" data-act="upgrade-info">How to upgrade</button></div>`;
+  if (left <= 3) return `<div class="callout upgrade"><div><b>${premiumBadge} ${left} member place${left === 1 ? '' : 's'} left on the Basic plan</b><p>Basic covers up to ${capWords()}. Upgrade to Premium before you reach the limit.</p></div><button class="btn btn-ghost btn-sm" type="button" data-act="upgrade-info">How to upgrade</button></div>`;
   return '';
 }
 function upgradeModal() {
-  infoModal('Upgrade to Premium', 'Your Basic plan is full', `<div class="upgrade-box"><div class="up-badge">${premiumBadge}</div><p>The Basic plan covers up to <b>${MEMBER_CAP} members</b> and you have ${activeMembers()}. Premium removes the limit and adds:</p>
+  infoModal('Upgrade to Premium', capReached() ? 'Your Basic plan is full' : 'What Premium adds', `<div class="upgrade-box"><div class="up-badge">${premiumBadge}</div><p>The Basic plan covers up to <b>${capWords()}</b> and you have ${activeMembers()} here. Premium removes the limit and adds:</p>
   <ul class="ticks"><li>No member limit</li><li>Professional letterhead receipts with the Chairman and Financial Secretary signatures</li><li>Your village name, code and logo on every document</li><li>One-click WhatsApp broadcast to members who owe</li><li>Meeting minutes: the Secretary writes, the Chairman approves, both sign</li><li>No VillageVault watermark on documents</li></ul><p class="hint">Ask VillageVault support to move your village or association to Premium. Your records stay exactly as they are.</p></div>`);
 }
 Object.assign(ACTIONS, { 'upgrade-info'() { upgradeModal(); } });
@@ -2929,7 +2943,7 @@ OWNERV['o-reviews'] = function () {
    NOTE: this stops casual tampering only. Real enforcement needs a server.
    ========================================================= */
 const PLAN_RULES = {
-  basic:   { memberCap: MEMBER_CAP, letterhead: false, watermark: true,  broadcast: false, codeEdit: false, autoBackup: false, minutes: false },
+  basic:   { memberCap: 20, letterhead: false, watermark: true,  broadcast: false, codeEdit: false, autoBackup: false, minutes: false },
   premium: { memberCap: Infinity,   letterhead: true,  watermark: false, broadcast: true,  codeEdit: true,  autoBackup: true, minutes: true }
 };
 const planKey = v => ((v || S.v || {}).plan === 'premium' ? 'premium' : 'basic');
@@ -2947,7 +2961,7 @@ const setRegistryPlan = (id, plan) => { const r = PLAN_REG.load(); r[id] = plan;
   const em = API.editMember;
   API.editMember = function (id, d) {
     const u = userById(id);
-    if (u && u.role === 'member' && !u.active && d.active === 'yes' && capReached()) throw new Error(`The Basic plan covers up to ${MEMBER_CAP} active members. Upgrade to Premium to switch this member back on.`);
+    if (u && u.role === 'member' && !u.active && d.active === 'yes' && capReached()) throw new Error(`The Basic plan covers up to ${basicCap()} active members here. Upgrade to Premium to switch this member back on.`);
     return em.call(API, id, d);
   };
   const sb = API.saveBranding;
@@ -3352,28 +3366,59 @@ function vilById(id) {
   const m = /^(.+)~(men|women)$/.exec(String(id)); if (!m) return null;
   const p = VILLAGES.find(x => x.id === m[1]); return p ? wingsOf(p).find(w => w.wing === m[2]) : null;
 }
+/* The owner decides, village by village, which wings exist. Both are on by default; an association never has wings.
+   A village is only ever opened through its wings, so it is not listed on its own. Switching a wing off hides it from
+   sign-in but keeps every record, so it can be switched on again. */
+const wingOn = (p, k) => { if (!p || p.type === 'association') return false; let m = {}; try { m = JSON.parse(lsGet('vv_wings_v1') || '{}'); } catch (_) {} return !(m[p.id] && m[p.id][k] === false); };
+function setWingOn(pid, k, on) { let m = {}; try { m = JSON.parse(lsGet('vv_wings_v1') || '{}'); } catch (_) {} m[pid] = Object.assign({ men: true, women: true }, m[pid], { [k]: !!on }); lsSet('vv_wings_v1', JSON.stringify(m)); }
+const activeWings = p => wingsOf(p).filter(w => wingOn(p, w.wing));
+// What a person can sign in to: an association, or a village's wings.
+const signInList = () => liveVillages().flatMap(v => v.type === 'association' ? [v] : activeWings(v));
 const allTenants = () => VILLAGES.flatMap(v => [v, ...wingsOf(v)]);
-const tenantList = () => VILLAGES.filter(v => !v.removed).flatMap(v => [v, ...wingsOf(v)]);
+const tenantList = () => VILLAGES.filter(v => !v.removed).flatMap(v => v.type === 'association' ? [v] : wingsOf(v));
 
+// Owner numbers for a village are its wings added together. A village is never opened on its own.
+function aggStats(vil) {
+  if (vil.type === 'association') return vStats(DB.cache[vil.id]);
+  const out = { members: 0, admins: 0, collected: 0, spent: 0, balance: 0, pending: 0, pendingAmt: 0 };
+  activeWings(vil).forEach(w => { const d = DB.cache[w.id]; if (!d) return; const s = vStats(d); Object.keys(s).forEach(k => { if (typeof s[k] === 'number') out[k] = (out[k] || 0) + s[k]; }); });
+  return out;
+}
 function wingPlan(parentId) {
   const r = PLAN_REG.load()[parentId], c = DB.cache[parentId];
   return r || (c && c.plan) || (['umuokpu', 'amakwu', 'ezinkwo'].indexOf(parentId) >= 0 ? 'premium' : 'basic');
 }
 // A wing of a village that came with the demo gets a small sample register; a wing of a village the owner created starts empty with one Lead Admin.
-async function seedWing(w) {
+async function seedWing(w, lead) {
   const p = VILLAGES.find(x => x.id === w.parent);
   if (!p.custom) return seedVillage(w);
   const settings = { levies: {} }; LEVIES.forEach(l => { settings.levies[l.id] = l.def; }); settings.accounts = []; settings.payNote = 'Pay into the account above, then upload your proof of payment on this site. Never pay cash to anyone except the treasurer.';
-  const uid = `${w.code}-A01`, hash = await hashPw(w.id, uid, `${w.code.toLowerCase()}-admin`);
+  const uid = `${w.code}-A01`, hash = await hashPw(w.id, uid, (lead && lead.password) || `${w.code.toLowerCase()}-admin`);
   return { id: w.id, name: w.name, code: w.code, type: w.type, wing: w.wing, parent: w.parent, settings, plan: wingPlan(w.parent), status: 'active', logo: null, meetings: [], tx: [], expenses: [], audit: [], seq: { tx: 0, exp: 0, aud: 0, mbr: 0 }, seededAt: stamp(),
-    users: [{ id: uid, name: `${w.name} Lead Admin`, role: 'admin', title: getRoles()[0], lead: true, family: '', kindred: '', phone: '', email: '', joined: today(), active: true, hash, mustChange: true }] };
+    users: [{ id: uid, name: (lead && lead.name) || `${w.name} Lead Admin`, role: 'admin', title: getRoles()[0], lead: true, family: '', kindred: '', phone: (lead && lead.phone) || '', email: '', joined: today(), active: true, hash, mustChange: true }] };
 }
 // Name, code, category and access status always follow the village.
 function syncWing(d, w) {
   let pd = DB.cache[w.parent]; if (!pd) { try { pd = JSON.parse(lsGet('vv_v1_' + w.parent) || 'null'); } catch (_) { pd = null; } }
   d.name = w.name; d.code = w.code; d.type = w.type; d.wing = w.wing; d.parent = w.parent; d.status = (pd && pd.status) || 'active';
 }
+OWNER_API.setWing = function (id, kind, on) {
+  requireOwner(); const vil = VILLAGES.find(x => x.id === id); if (!vil || vil.type === 'association') throw new Error('Associations do not have wings.');
+  if (!WING_KINDS[kind]) throw new Error('Choose the Men’s Wing or the Women’s Wing.');
+  if (wingOn(vil, kind) === !!on) throw new Error('Nothing was changed.');
+  setWingOn(id, kind, on); olog(on ? 'Wing added' : 'Wing removed', vil.name, `${WING_KINDS[kind].label} ${on ? 'switched on' : 'switched off. Records are kept and can be restored'}`); OWN.save();
+};
 (function wrapWingApis() {
+  // A new village is opened through its wings, so the Lead Admin the owner names and the starting password go to both wings.
+  const av = OWNER_API.addVillage;
+  OWNER_API.addVillage = async function (d) {
+    const r = await av.call(OWNER_API, d), p = VILLAGES.find(x => x.id === r.id); r.wingIds = [];
+    if (p && p.type !== 'association') for (const w of wingsOf(p)) {
+      const data = await seedWing(w, { name: (d.leadName || '').trim(), password: d.password, phone: (d.phone || '').trim() }); migrate(data); syncWing(data, w);
+      if (!lsSet('vv_v1_' + w.id, JSON.stringify(data))) throw new Error('The browser storage is full.'); DB.cache[w.id] = data; r.wingIds.push({ label: wingLabel(w.wing), uid: data.users[0].id });
+    }
+    return r;
+  };
   const mv = OWNER_API.manageVillage;
   OWNER_API.manageVillage = function (id, d) {
     const r = mv.call(OWNER_API, id, d), st = (DB.cache[id] || {}).status || 'active';
@@ -3384,6 +3429,7 @@ function syncWing(d, w) {
   OWNER_API.deleteVillage = function (id) {
     const r = dv.call(OWNER_API, id);
     ['men', 'women'].forEach(k => { const wid = `${id}~${k}`; delete DB.cache[wid]; delete wingCache[wid]; try { localStorage.removeItem('vv_v1_' + wid); } catch (_) {} const reg = PLAN_REG.load(); delete reg[wid]; PLAN_REG.save(reg); });
+    try { const m = JSON.parse(lsGet('vv_wings_v1') || '{}'); delete m[id]; lsSet('vv_wings_v1', JSON.stringify(m)); } catch (_) {}
     return r;
   };
 })();
@@ -3416,8 +3462,15 @@ const AUDIO = {
   async del(key) { const db = await this.open(); return new Promise(res => { const t = db.transaction('a', 'readwrite'); t.objectStore('a').delete(key); t.oncomplete = () => res(); t.onerror = () => res(); }); }
 };
 const audioKey = m => `${S.v.id}:${m.id}`;
-const REC = { rec: null, chunks: [], blob: null, t0: 0, timer: null };
-function recReset() { try { if (REC.rec && REC.rec.state !== 'inactive') REC.rec.stop(); } catch (_) {} clearInterval(REC.timer); REC.rec = null; REC.chunks = []; REC.blob = null; }
+const REC = { rec: null, chunks: [], blob: null, t0: 0, timer: null, meter: null, stream: null, ctx: null, peak: 0, loud: 0, quiet: 0, frames: 0 };
+function recVerdict() {
+  if (!REC.frames) return 'Play it back before you save it.';
+  if (REC.peak < 0.08) return 'This recording is very quiet. Play it back. If you cannot hear people clearly, record again with the device closer to the speakers.';
+  if (REC.loud / REC.frames > 0.05) return 'Parts of this recording were too loud and may sound distorted. Play it back before you save it.';
+  if (REC.quiet / REC.frames > 0.7) return 'Most of this recording was very quiet. Play it back before you save it.';
+  return 'Level looked good. Play it back before you save it.';
+}
+function recReset() { try { if (REC.rec && REC.rec.state !== 'inactive') REC.rec.stop(); } catch (_) {} clearInterval(REC.timer); clearInterval(REC.meter); try { if (REC.stream) REC.stream.getTracks().forEach(t => t.stop()); } catch (_) {} REC.rec = null; REC.chunks = []; REC.blob = null; }
 
 /* ---------- Data operations ---------- */
 Object.assign(API, {
@@ -3590,6 +3643,9 @@ Object.assign(ACTIONS, {
     const m = getMin(el.dataset.id); recReset();
     openModal({ title: 'Meeting audio', sub: esc(m.title), submit: 'Save audio', body: `<label class="check"><input type="checkbox" name="consent" required> Everyone present has been told this meeting is being recorded.</label>
       <div class="btn-row" style="margin:10px 0"><button class="btn btn-ghost btn-sm" type="button" data-act="rec-start" id="recGo">Start recording</button><button class="btn btn-ghost btn-sm" type="button" data-act="rec-stop" id="recStop" disabled>Stop</button><span id="recT" class="muted">0:00</span></div>
+      <div class="field"><label for="recDev">Microphone</label><select id="recDev" class="select"><option value="">Default microphone</option></select></div>
+      <label class="check"><input type="checkbox" id="recClose"> Only one or two people speak, close to the microphone</label>
+      <div class="lvl" aria-hidden="true"><i id="recLvl"></i></div><p class="hint" id="recMsg" aria-live="polite">Tip: put the phone or laptop in the middle of the table. Use the device's own microphone, not a Bluetooth headset (those record thin, muffled sound). Switch off music and fans, and keep it away from other phones, which cause buzzing.</p>
       <div class="field"><label for="mnF">Or choose an audio file</label><input id="mnF" name="file" type="file" accept="audio/*"></div><p class="hint">Audio stays in this browser on this device (up to 25 MB, recordings stop at 20 minutes). A backend will keep it safely later.</p><div id="recOut"></div>`,
       onSubmit: async fd => {
         if (!fd.get('consent')) throw new Error('Confirm that everyone present knows about the recording.');
@@ -3599,15 +3655,36 @@ Object.assign(ACTIONS, {
         if (!/^audio\//.test(blob.type || '')) throw new Error('Choose an audio file.');
         await AUDIO.put(audioKey(m), blob); const mm = (S.v.minutes || []).find(x => x.id === m.id); mm.audio = { size: blob.size, type: blob.type, at: stamp() }; log('Attached meeting audio', m.id, `${Math.round(blob.size / 1024)} KB`); commit(); recReset(); closeModal(); renderView(); toast('Audio saved.', 'ok');
       } });
+    try { navigator.mediaDevices.enumerateDevices().then(l => { const sel = $('#recDev'); if (!sel) return; l.filter(d => d.kind === 'audioinput' && d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications').forEach((d, k) => { const o = document.createElement('option'); o.value = d.deviceId; o.textContent = d.label || `Microphone ${k + 1}`; sel.appendChild(o); }); }).catch(() => {}); } catch (_) {}
   },
   async 'rec-start'() {
+    /* Why recordings sounded poor: the browser default (audio: true) switches on echo cancelling and heavy noise suppression, which treat a room of
+       people as "noise" and chop up distant voices. Here those are off, the voice band is cleaned (rumble and hum cut), quiet speakers are
+       lifted with a gentle compressor, and the file is saved as 96 kbps Opus (AAC on Safari) instead of the low default. */
     try {
-      const st = await navigator.mediaDevices.getUserMedia({ audio: true }); recReset(); const r = new MediaRecorder(st); REC.rec = r; REC.chunks = []; REC.t0 = Date.now();
+      if (!window.MediaRecorder || !navigator.mediaDevices) throw new Error('nomic');
+      const dev = ($('#recDev') || {}).value, room = !$('#recClose') || !$('#recClose').checked;
+      const base = { channelCount: 1, sampleRate: 48000, echoCancellation: false, noiseSuppression: false, autoGainControl: room };
+      let st; try { st = await navigator.mediaDevices.getUserMedia({ audio: dev ? Object.assign({ deviceId: { exact: dev } }, base) : base }); } catch (e1) { if (e1 && /Permission|NotAllowed|NotFound/.test(e1.name || '')) throw e1; st = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+      recReset(); REC.stream = st; let src = st, ctx = null, an = null;
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext; ctx = new AC(); await ctx.resume();
+        const input = ctx.createMediaStreamSource(st), hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 90;
+        const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 12000;
+        const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -34; comp.knee.value = 24; comp.ratio.value = 3.5; comp.attack.value = 0.01; comp.release.value = 0.25;
+        const gain = ctx.createGain(); gain.gain.value = room ? 1.6 : 1.0;
+        const lim = ctx.createDynamicsCompressor(); lim.threshold.value = -3; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.002; lim.release.value = 0.1;
+        an = ctx.createAnalyser(); an.fftSize = 1024; const dest = ctx.createMediaStreamDestination();
+        input.connect(hp); hp.connect(lp); lp.connect(comp); comp.connect(gain); gain.connect(lim); lim.connect(an); lim.connect(dest); src = dest.stream; REC.ctx = ctx;
+      } catch (_) { src = st; an = null; try { if (ctx) ctx.close(); } catch (__) {} REC.ctx = null; }
+      const types = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4', 'audio/webm'], mt = types.find(t => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t));
+      const r = new MediaRecorder(src, mt ? { mimeType: mt, audioBitsPerSecond: 96000 } : { audioBitsPerSecond: 96000 }); REC.rec = r; REC.chunks = []; REC.t0 = Date.now(); REC.peak = 0; REC.loud = 0; REC.quiet = 0; REC.frames = 0;
       r.ondataavailable = e => { if (e.data && e.data.size) REC.chunks.push(e.data); };
-      r.onstop = () => { st.getTracks().forEach(t => t.stop()); REC.blob = new Blob(REC.chunks, { type: r.mimeType || 'audio/webm' }); const o = $('#recOut'); if (o) o.innerHTML = `<audio controls src="${URL.createObjectURL(REC.blob)}" style="width:100%"></audio>`; const g = $('#recGo'), s = $('#recStop'); if (g) g.disabled = false; if (s) s.disabled = true; clearInterval(REC.timer); };
+      r.onstop = () => { clearInterval(REC.meter); try { st.getTracks().forEach(t => t.stop()); if (REC.ctx) REC.ctx.close(); } catch (_) {} REC.blob = new Blob(REC.chunks, { type: (r.mimeType || mt || 'audio/webm').split(';')[0] }); const o = $('#recOut'); if (o) o.innerHTML = `<audio controls src="${URL.createObjectURL(REC.blob)}" style="width:100%"></audio><p class="hint" id="recVerdict">${esc(recVerdict())}</p>`; const g = $('#recGo'), s = $('#recStop'); if (g) g.disabled = false; if (s) s.disabled = true; clearInterval(REC.timer); };
       r.start(1000); $('#recGo').disabled = true; $('#recStop').disabled = false;
+      if (an) { const buf = new Uint8Array(an.fftSize); REC.meter = setInterval(() => { an.getByteTimeDomainData(buf); let pk = 0; for (let i = 0; i < buf.length; i++) pk = Math.max(pk, Math.abs(buf[i] - 128) / 128); REC.peak = Math.max(REC.peak, pk); REC.frames++; if (pk > 0.97) REC.loud++; if (pk < 0.03) REC.quiet++; const bar = $('#recLvl'), msg = $('#recMsg'); if (bar) bar.style.width = Math.min(100, Math.round(pk * 140)) + '%'; if (msg) msg.textContent = pk > 0.97 ? 'Too loud: move the device back a little.' : pk < 0.03 ? 'Very quiet: move the device closer to the speakers.' : 'Level is good.'; }, 150); }
       REC.timer = setInterval(() => { const s = Math.floor((Date.now() - REC.t0) / 1000), t = $('#recT'); if (t) t.textContent = `${Math.floor(s / 60)}:${pad(s % 60)}`; if (s >= 1200) ACTIONS['rec-stop'](); }, 500);
-    } catch (e) { toast('The microphone could not be opened. You can choose an audio file instead.', 'err'); }
+    } catch (e) { toast(e && /Permission|NotAllowed/.test(e.name || '') ? 'The microphone is blocked. Allow it in the browser address bar, or choose an audio file instead.' : 'The microphone could not be opened. You can choose an audio file instead.', 'err'); }
   },
   'rec-stop'() { try { if (REC.rec && REC.rec.state !== 'inactive') REC.rec.stop(); } catch (_) {} }
 });
@@ -3632,6 +3709,196 @@ Object.assign(ACTIONS, {
     sel.addEventListener('change', () => { const t = mtypeOf(sel.value); inp.value = t ? t.name : ''; inp.focus(); });
   };
 })();
+/* =========================================================
+   ROUND 11 / step 7: "What is Premium" page (the language picker was removed).
+   ========================================================= */
+const PLAN_TABLE = [
+  ['Active members', 'Village: 20 (10 in the Men\u2019s Wing, 10 in the Women\u2019s Wing). Association: 10', 'No limit'],
+  ['Proof upload, admin verification and the full ledger', 1, 1],
+  ['Receipts, monthly and yearly reports and member statements', 1, 1],
+  ['Attendance register, pledges and achievements', 1, 1],
+  ["Men's and Women's wings (they use the village's plan)", 1, 1],
+  ['Receipts and reports', 'VillageVault watermark', 'Letterhead, signed by the Chairman and Financial Secretary'],
+  ['Village name, code and logo on every document', 0, 1],
+  ['Meeting minutes (Secretary writes, Chairman approves, both sign)', 0, 1],
+  ['WhatsApp broadcast to members who owe (Chairman)', 0, 1],
+  ['Change the village code', 0, 1],
+  ['Automatic backups', 0, 1]
+];
+function plansView() {
+  const prem = S.v.plan === 'premium', n = activeMembers();
+  const cell = v => v === 1 ? '<td class="yes">Included</td>' : v === 0 ? '<td class="no">Not included</td>' : `<td>${esc(v)}</td>`;
+  const head = prem
+    ? `<div class="callout ok"><div><b>${esc(S.v.name)} is on Premium</b><p>Everything below is switched on for your village or association.</p></div></div>`
+    : `<div class="callout upgrade"><div><b>${esc(S.v.name)} is on the Basic plan</b><p>You have ${n} active member${n === 1 ? '' : 's'} and Basic covers up to ${capWords()}. Premium removes the limit and switches on the extras in the right-hand column.</p></div><button class="btn btn-saffron btn-sm" type="button" data-act="upgrade-info">How to upgrade</button></div>`;
+  return `<section class="panel"><div class="panel-h"><div><h2>Plans and Premium</h2><p>What each plan includes. Moving to Premium keeps every record exactly as it is.</p></div></div>${head}
+  <div class="tablewrap"><table class="t plan-table"><thead><tr><th scope="col">What you get</th><th scope="col">Basic${prem ? '' : ' (your plan)'}</th><th scope="col">Premium${prem ? ' (your plan)' : ''}</th></tr></thead><tbody>${PLAN_TABLE.map(r => `<tr><td>${esc(r[0])}</td>${cell(r[1])}${cell(r[2])}</tr>`).join('')}</tbody></table></div></section>`;
+}
+VIEWS.admin.plans = plansView; VIEWS.member.plans = plansView;
+/* =========================================================
+   ROUND 12: who may do what, and own login details.
+   Duties (the Financial Secretary is the only one who handles the money controls):
+     - records, edits and voids expenses
+     - opens and closes the attendance register
+     - verifies or rejects payment proofs
+     - the Financial Secretary's own proofs are verified by the Chairman only
+     - the Chairman's proofs are verified by the Financial Secretary
+   Every member and admin may change their own username and password.
+   The checks sit in the API, so they hold even if a button is shown by mistake.
+   ========================================================= */
+const isFinSec = () => !!S.u && !S.owner && S.u.id !== 'SUPPORT' && S.u.role === 'admin' && S.u.active && S.u.title === 'Financial Secretary';
+function whoVerifies(memberId) {
+  const fs = holderOf('Financial Secretary');
+  return fs && memberId === fs.id ? { who: 'Chairman', ok: isChair() } : { who: 'Financial Secretary', ok: isFinSec() };
+}
+const canVerifyTxOf = memberId => whoVerifies(memberId).ok;
+function assertCanVerify(memberId) {
+  const w = whoVerifies(memberId);
+  if (!w.ok) throw new Error(w.who === 'Chairman' ? 'The Financial Secretary’s own payments can only be verified by the Chairman.' : 'Only the Financial Secretary can verify payment proofs.');
+}
+function assertFinSec(what) { if (!isFinSec()) throw new Error(`Only the Financial Secretary can ${what}.`); }
+(function dutyChecks() {
+  const wrap = (name, check) => { const f = API[name]; API[name] = function () { check.apply(null, arguments); return f.apply(API, arguments); }; };
+  wrap('verify', id => { requireAdmin(); assertCanVerify(getTx(id).memberId); });
+  wrap('reject', id => { requireAdmin(); assertCanVerify(getTx(id).memberId); });
+  wrap('addTx', d => { requireAdmin(); if (d && d.status !== 'pending') assertCanVerify(d.memberId); });
+  wrap('editTx', (id, d) => { requireAdmin(); const t = getTx(id); if (d && d.status !== t.status && d.status !== 'pending') assertCanVerify(t.memberId); });
+  wrap('saveExpense', () => { requireAdmin(); assertFinSec('record or change expenses'); });
+  wrap('voidExpense', () => { requireAdmin(); assertFinSec('void an expense'); });
+  wrap('openRegister', () => { requireAdmin(); assertFinSec('open the attendance register'); });
+  wrap('closeRegister', () => { requireAdmin(); assertFinSec('close the attendance register'); });
+})();
+
+/* Hide the buttons a person is not allowed to use, so they are not offered something that will be refused. */
+function dutyPass() {
+  if (!S.u || S.owner || S.u.role !== 'admin') return;
+  const root = $('#view'); if (!root) return;
+  if (!isFinSec()) root.querySelectorAll('[data-act=add-exp],[data-act=edit-exp],[data-act=void-exp],[data-act=mtg-open],[data-act=mtg-close]').forEach(b => b.remove());
+  root.querySelectorAll('[data-act=verify-tx],[data-act=reject-tx]').forEach(b => { const t = (S.v.tx || []).find(x => x.id === b.dataset.id); if (t && !canVerifyTxOf(t.memberId)) b.remove(); });
+}
+(function hookRender() {
+  const rv = renderView; renderView = function () { const r = rv.apply(this, arguments); try { dutyPass(); } catch (_) {} return r; };
+})();
+
+/* ---------- Own username ----------
+   The login ID (for example UMKM-M004) never changes, because every record points to it. A username is an extra name that
+   signs in to the same account. It is unique inside the village or association. */
+const USERNAME_RX = /^[a-z][a-z0-9._-]{3,23}$/;
+Object.assign(API, {
+  async changeUsername(cur, name) {
+    if (!S.u || S.owner || S.u.id === 'SUPPORT') throw new Error('Sign in as a member or admin to change your username.'); requireWritable();
+    if (await hashPw(S.v.id, S.u.id, cur) !== S.u.hash) throw new Error('Your current password is not correct.');
+    const n = String(name || '').trim().toLowerCase();
+    if (!USERNAME_RX.test(n)) throw new Error('A username is 4 to 24 characters: start with a letter, then letters, numbers, dot, dash or underscore.');
+    if (S.v.users.some(x => x.id !== S.u.id && (x.id.toLowerCase() === n || (x.username || '').toLowerCase() === n))) throw new Error('That username is taken. Choose another.');
+    if ((S.u.username || '') === n) throw new Error('That is already your username.');
+    S.u.username = n; S.u.rememberTokens = []; if (isAdmin()) log('Changed own username', S.u.id, 'Admin changed their username'); commit();
+  }
+});
+function changeUsernameModal() {
+  openModal({ title: 'Change username', sub: `Your login ID ${S.u.id} always keeps working. A username is an extra name you can sign in with.`,
+    body: `<div class="field"><label for="unN">New username</label><input id="unN" name="name" class="input" maxlength="24" autocomplete="username" value="${esc(S.u.username || '')}" required><span class="hint">${S.u.username ? 'Now: ' + esc(S.u.username) + '. ' : ''}4 to 24 characters, starting with a letter.</span></div>${pwField('unP', 'cur', 'Your password, to confirm it is you', 'current-password')}`,
+    submit: 'Save username', onSubmit: async fd => { await API.changeUsername(fd.get('cur') || '', fd.get('name')); done('Username changed.'); } });
+}
+ACTIONS['change-username'] = () => changeUsernameModal();
+/* =========================================================
+   ROUND 12: fingerprint or face sign-in (WebAuthn platform authenticator).
+   How it works: the phone or computer's own fingerprint, face or screen-lock check creates a key pair inside the device's secure
+   hardware. Only the PUBLIC key is kept here. To sign in, the device must prove it holds the private key, after the person passes
+   the fingerprint, face or PIN check ("user verification" is required, never optional). No fingerprint or face data ever leaves the
+   device and VillageVault never sees it. A new random challenge is used every time, so a recording of an earlier sign-in is useless.
+   Admins who have two-step sign-in switched on are still asked for their code afterwards.
+   Honest limit of a site with no server: the signature is checked in this browser. When the backend is added, the same
+   challenge and signature are verified on the server, which is what makes it bank grade. This file is built so that move is a swap, not a rewrite.
+   ========================================================= */
+const BIO_KEY = 'vv_bio_v1';
+const b64u = {
+  enc: buf => { const b = new Uint8Array(buf); let s = ''; b.forEach(x => { s += String.fromCharCode(x); }); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); },
+  dec: str => { str = String(str).replace(/-/g, '+').replace(/_/g, '/'); while (str.length % 4) str += '='; const s = atob(str), b = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i); return b; }
+};
+const bioStore = () => { try { return JSON.parse(lsGet(BIO_KEY) || '{}') || {}; } catch (_) { return {}; } };
+const bioSave = o => lsSet(BIO_KEY, JSON.stringify(o));
+const bioSupported = () => !!(window.isSecureContext && window.PublicKeyCredential && navigator.credentials && navigator.credentials.create && window.crypto && crypto.subtle);
+const bioRpId = () => location.hostname;
+const bioEnrolled = (vid, uid) => { const o = bioStore()[vid]; return !!(o && o[uid]); };
+async function bioPlatformReady() { try { return bioSupported() && !!(await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); } catch (_) { return false; } }
+const bioSha = async data => new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+const bioChallenge = () => crypto.getRandomValues(new Uint8Array(32));
+function derToRaw(der) {
+  const b = new Uint8Array(der); let i = 2; if (b[1] & 0x80) i += (b[1] & 0x7f);
+  const rd = () => { i++; let l = b[i++]; let v = b.slice(i, i + l); i += l; while (v.length > 32 && v[0] === 0) v = v.slice(1); const o = new Uint8Array(32); o.set(v, 32 - v.length); return o; };
+  const r = rd(), s = rd(), out = new Uint8Array(64); out.set(r, 0); out.set(s, 32); return out;
+}
+const bioEq = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/* Turn it on for the signed-in person, after they type their password again. */
+async function bioEnrol(cur) {
+  if (!S.u || S.owner || S.u.id === 'SUPPORT') throw new Error('Sign in as a member or admin first.');
+  if (!(await bioPlatformReady())) throw new Error('This device has no fingerprint, face or screen-lock sign-in available, or the page is not on a secure (https) address.');
+  if (await hashPw(S.v.id, S.u.id, cur) !== S.u.hash) throw new Error('Your password is not correct.');
+  let cred;
+  try {
+    cred = await navigator.credentials.create({ publicKey: { rp: { name: 'VillageVault', id: bioRpId() }, user: { id: new TextEncoder().encode(`${S.v.id}|${S.u.id}`), name: S.u.id, displayName: S.u.name },
+      challenge: bioChallenge(), pubKeyCredParams: [{ type: 'public-key', alg: -7 }], timeout: 60000, attestation: 'none',
+      authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred' } } });
+  } catch (e) { throw new Error(e && e.name === 'NotAllowedError' ? 'The fingerprint or face check was cancelled or timed out.' : 'This device could not set up fingerprint or face sign-in.'); }
+  const pk = cred.response.getPublicKey && cred.response.getPublicKey();
+  if (!pk) throw new Error('This browser cannot keep the key it needs. Update the browser and try again.');
+  const o = bioStore(); o[S.v.id] = o[S.v.id] || {}; o[S.v.id][S.u.id] = { cid: b64u.enc(cred.rawId), pub: b64u.enc(pk), counter: 0, epoch: S.u.bioEpoch || 0, at: Date.now() }; bioSave(o);
+  if (isAdmin()) log('Switched on fingerprint or face sign-in', S.u.id, 'On one device'); commit();
+}
+function bioRemove(vid, uid) { const o = bioStore(); if (o[vid]) { delete o[vid][uid]; if (!Object.keys(o[vid]).length) delete o[vid]; bioSave(o); } }
+
+/* Sign in: the device proves it holds the key, the signature is checked, then the normal sign-in (and two-step for admins) continues. */
+async function bioLogin(vid) {
+  const o = (bioStore()[vid]) || {}, ids = Object.keys(o); if (!ids.length) throw new Error('No fingerprint or face sign-in is set up for this village on this device. Sign in with your password, then switch it on from the menu.');
+  const fails = Number(ssGet('vv_bio_fail') || 0); if (fails >= 5) throw new Error('Too many fingerprint or face attempts. Sign in with your password.');
+  const challenge = bioChallenge(); let a;
+  try { a = await navigator.credentials.get({ publicKey: { challenge, rpId: bioRpId(), timeout: 60000, userVerification: 'required', allowCredentials: ids.map(id => ({ type: 'public-key', id: b64u.dec(o[id].cid) })) } }); }
+  catch (e) { throw new Error(e && e.name === 'NotAllowedError' ? 'The fingerprint or face check was cancelled or did not match.' : 'Fingerprint or face sign-in is not available right now. Use your password.'); }
+  const bad = () => { ssSet('vv_bio_fail', String(fails + 1)); return new Error('That fingerprint or face sign-in could not be confirmed. Use your password.'); };
+  const uid = ids.find(id => o[id].cid === b64u.enc(a.rawId)); if (!uid) throw bad();
+  const rec = o[uid], r = a.response, cd = new Uint8Array(r.clientDataJSON), ad = new Uint8Array(r.authenticatorData);
+  let c; try { c = JSON.parse(new TextDecoder().decode(cd)); } catch (_) { throw bad(); }
+  if (c.type !== 'webauthn.get' || c.origin !== location.origin || !bioEq(b64u.dec(c.challenge), challenge)) throw bad();
+  if (!bioEq(ad.slice(0, 32), await bioSha(new TextEncoder().encode(bioRpId())))) throw bad();
+  const flags = ad[32]; if (!(flags & 1) || !(flags & 4)) throw bad();               // user present AND user verified (fingerprint, face or PIN)
+  const counter = ((ad[33] << 24) | (ad[34] << 16) | (ad[35] << 8) | ad[36]) >>> 0; if ((counter || rec.counter) && counter <= rec.counter) throw bad();   // a replayed or cloned key
+  const key = await crypto.subtle.importKey('spki', b64u.dec(rec.pub), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+  const signed = new Uint8Array(ad.length + 32); signed.set(ad, 0); signed.set(await bioSha(cd), ad.length);
+  if (!(await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, derToRaw(r.signature), signed))) throw bad();
+  const vil = vilById(vid); if (!vil || vil.removed) throw new Error('This village or association is no longer on VillageVault. Contact your admin.');
+  const v = await DB.load(vid), u = v.users.find(x => x.id === uid);
+  if (!u || !u.active) { bioRemove(vid, uid); throw new Error('This account is not active. Contact your admin.'); }
+  if ((u.bioEpoch || 0) !== (rec.epoch || 0)) { bioRemove(vid, uid); throw new Error('Your login details were reset by an admin, so fingerprint or face sign-in was switched off on this device. Sign in with your password and switch it on again.'); }
+  if (v.status === 'suspended') throw new Error('Access is paused for this village or association. Contact VillageVault support.');
+  rec.counter = counter; const all = bioStore(); all[vid][uid] = rec; bioSave(all); ssDel('vv_bio_fail');
+  ssSet('vv_sess', JSON.stringify({ v: vid, u: u.id })); enterApp(v, u);
+}
+
+/* A password reset by an admin or the owner switches the device sign-in off until the person turns it on again. */
+(function bioEpochs() {
+  const rp = API.resetPassword; API.resetPassword = function (id) { const u = userById(id); if (u) u.bioEpoch = (u.bioEpoch || 0) + 1; return rp.apply(API, arguments); };
+  const ra = OWNER_API.resetAdminPw; OWNER_API.resetAdminPw = function (v, id) { const u = v.users.find(x => x.id === id); if (u) u.bioEpoch = (u.bioEpoch || 0) + 1; return ra.apply(OWNER_API, arguments); };
+})();
+
+function bioModal() {
+  const on = bioEnrolled(S.v.id, S.u.id);
+  openModal({ title: 'Fingerprint or face sign-in', sub: on ? 'This device can open your account with your fingerprint, face or screen lock.' : 'Use your phone or computer’s own fingerprint, face or screen-lock check instead of typing your password on this device.',
+    body: `<p class="hint">Your fingerprint or face never leaves this device and VillageVault never sees it. You can still sign in with your password. Switching it on only works on this device.${S.u.role === 'admin' ? ' Your two-step code, if you use one, is still asked for.' : ''}</p>${on ? '' : pwField('bioP', 'cur', 'Your password, to confirm it is you', 'current-password')}`,
+    submit: on ? 'Switch off on this device' : 'Switch on', danger: on,
+    onSubmit: async fd => { if (on) { bioRemove(S.v.id, S.u.id); done('Fingerprint or face sign-in switched off on this device.'); } else { await bioEnrol(fd.get('cur') || ''); done('Fingerprint or face sign-in is on for this device.'); } } });
+}
+Object.assign(ACTIONS, {
+  'bio-manage'() { bioModal(); },
+  async 'bio-login'() {
+    const vid = ($('#heroVillage') || {}).value, err = m => formError(m, 'loginError'); err('');
+    if (!vid) return err('Choose your village or association first.');
+    const btn = $('#bioBtn'); if (btn) btn.disabled = true;
+    try { await bioLogin(vid); } catch (ex) { err(ex.message || 'Fingerprint or face sign-in did not work. Use your password.'); } finally { if (btn) btn.disabled = false; }
+  }
+});
+(async function bioInit() { const b = $('#bioBtn'); if (b && (await bioPlatformReady())) b.hidden = false; })();
 
 /* ---------- Keep open tabs in step: when another tab (for example the admin verifying a payment) saves
    a village, this tab picks up the change by itself ---------- */
