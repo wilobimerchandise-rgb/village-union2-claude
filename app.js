@@ -418,9 +418,15 @@ function memberPaid(id, year) { return (txIndex().byM.get(id) || []).filter(t =>
 function memberOutstanding(id, year) {
   const paid = memberPaid(id, year); let o = 0;
   levies().filter(l => l.fixed).forEach(l => { o += Math.max(0, (S.v.settings.levies[l.id] || 0) - sum(paid.filter(t => t.levy === l.id))); });
-  return o;
+  return o + pledgeOwedOf(id);
 }
 // What a member owes, levy by levy (only verified payments count, so it updates by itself once an admin verifies)
+// A pledge that is not fully paid is an outstanding debt, like an unpaid levy.
+const pledgeOwedOf = id => (S.v.pledges || []).filter(p => p.memberId === id && p.status !== 'cancelled').reduce((a, p) => a + Math.max(0, p.amount - sum(S.v.tx.filter(t => t.pledgeId === p.id && t.status === 'verified'))), 0);
+function owingRowsAll(id, yr) {
+  const pl = (S.v.pledges || []).filter(p => p.memberId === id && p.status !== 'cancelled').map(p => { const paid = sum(S.v.tx.filter(t => t.pledgeId === p.id && t.status === 'verified')); return { L: { id: 'P:' + p.id, name: 'Pledge: ' + p.purpose, color: '#B8860B' }, need: p.amount, paid, owe: Math.max(0, p.amount - paid), pledge: true, pledgeId: p.id }; }).filter(r => r.owe > 0);
+  return owingRows(id, yr).concat(pl);
+}
 function owingRows(id, yr) {
   const paid = memberPaid(id, yr);
   return levies().filter(l => l.fixed).map(l => { const need = S.v.settings.levies[l.id] || 0, p = sum(paid.filter(t => t.levy === l.id)); return { L: l, need, paid: p, owe: Math.max(0, need - p) }; });
@@ -492,8 +498,10 @@ const kindredOpts = (sel, all) => (all ? opt('', all, sel) : '') + Array.from(ne
 const MEMBER_CAP = 20, WING_CAP = 10, ASSOC_CAP = 10;
 const basicCap = () => (S.v && S.v.type === 'association') ? ASSOC_CAP : (S.v && S.v.wing) ? WING_CAP : MEMBER_CAP;
 const activeMembers = () => S.v.users.filter(u => u.role === 'member' && u.active).length, capReached = () => S.v.plan !== 'premium' && activeMembers() >= basicCap();
+const orgWord = () => (S.v && S.v.type === 'association') ? 'Association' : 'Village';
+const balLabel = () => orgWord() + ' balance' + ((S.v && S.v.wing) ? ` (${wingLabel(S.v.wing)})` : '');
 const capWords = () => (S.v && S.v.type === 'association') ? `${ASSOC_CAP} members` : (S.v && S.v.wing) ? `${WING_CAP} members in each wing` : `${MEMBER_CAP} members, ${WING_CAP} in each wing`;
-const memberOpts = (sel, all, onlyActive) => (all ? opt('', all, sel) : '') + S.v.users.filter(u => u.role === 'member' && (!onlyActive || u.active || u.id === sel)).map(u => opt(u.id, `${u.name} (${u.id})`, sel)).join('');
+const memberOpts = (sel, all, onlyActive) => (all ? opt('', all, sel) : '') + S.v.users.filter(u => (u.role === 'member' || u.role === 'admin') && (!onlyActive || u.active || u.id === sel)).map(u => opt(u.id, `${u.name} (${u.id})`, sel)).join('');
 function yearOpts(sel, all) {
   const ys = new Set([new Date().getFullYear()]); S.v.tx.forEach(t => ys.add(yearOf(t.date))); S.v.expenses.forEach(e => ys.add(yearOf(e.date)));
   return (all ? opt('', all, sel) : '') + Array.from(ys).sort((a, b) => b - a).map(y => opt(y, y, sel)).join('');
@@ -909,7 +917,7 @@ const MEMBER = {
       body = table(['Date', 'Category', 'Description', { t: 'Amount', num: true }], page.map(e => [esc(fmtDate(e.date)), esc(e.category), esc(e.description), money(e.amount)]), ['No spending recorded', '']) + pager(list.length, f.page, CONFIG.PER_PAGE);
     }
     return `<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center"><p class="muted">Read-only view of ${esc(S.v.name)}'s collections, spending and admin activity. Only admins can change records.</p><button class="btn btn-primary btn-sm" type="button" data-act="report-modal" data-scope="village">Download village report</button></div>
-    <div class="kpis">${kpi('Village balance', money(bal), 'All income less all spending', 'hot')}${kpi('Collected in ' + yr, money(sum(inY)), `${inY.length} verified payments`)}${kpi('Spent in ' + yr, money(sum(exY)), `${exY.length} items`)}${kpi('Active members', String(S.v.users.filter(u => u.role === 'member' && u.active).length), '')}</div>
+    <div class="kpis">${kpi(balLabel(), money(bal), 'All income less all spending', 'hot')}${kpi('Collected in ' + yr, money(sum(inY)), `${inY.length} verified payments`)}${kpi('Spent in ' + yr, money(sum(exY)), `${exY.length} items`)}${kpi('Active members', String(S.v.users.filter(u => u.role === 'member' && u.active).length), '')}</div>
     <div class="grid-2"><section class="panel"><div class="panel-h"><div><h2>Collections, last 12 months</h2><p>Verified payments only</p></div></div>${barChart(monthlySeries(ver))}</section>
     <section class="panel"><div class="panel-h"><h2>Income by levy in ${yr}</h2></div>${donut(levyAll().map(l => ({ label: l.name, color: l.color, value: sum(inY.filter(t => t.levy === l.id)) })))}</section></div>
     ${paymentPanel()}
@@ -958,12 +966,12 @@ function reportsView() {
 const ADMIN = {
   overview() {
     const yr = new Date().getFullYear(), ver = villageTx(), ex = activeExp(), inY = ver.filter(t => yearOf(t.date) === yr), exY = ex.filter(e => yearOf(e.date) === yr), pend = pendingTx();
-    const behind = S.v.users.filter(u => u.role === 'member' && u.active).map(u => ({ u, o: memberOutstanding(u.id, yr) })).filter(x => x.o > 0).sort((a, b) => b.o - a.o);
+    const behind = S.v.users.filter(u => (u.role === 'member' || u.role === 'admin') && u.active).map(u => ({ u, o: memberOutstanding(u.id, yr) })).filter(x => x.o > 0).sort((a, b) => b.o - a.o);
     const recent = S.v.audit.slice().sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, 6);
     return `<div><h2 style="font-size:1.7rem">${greeting()}, ${esc(S.u.name.split(' ')[0])}.</h2><p class="muted">${esc(S.u.title)}, ${esc(S.v.name)}</p></div>
     ${S.v.requests.filter(r => r.status === 'new').length ? `<div class="callout"><div><b>${S.v.requests.filter(r => r.status === 'new').length} member${S.v.requests.filter(r => r.status === 'new').length > 1 ? 's are' : ' is'} asking for login details</b><p>Check each name against your register before you send anything.</p></div><button class="btn btn-primary btn-sm" type="button" data-act="open-requests">See requests</button></div>` : ''}
     ${pend.length ? `<div class="callout"><div><b>${pend.length} payment${pend.length > 1 ? 's are' : ' is'} waiting for verification</b><p>${money(sum(pend))} is not in the books until you check the proof.</p></div><button class="btn btn-primary btn-sm" type="button" data-act="goto" data-page="verify">Review now</button></div>` : `<div class="callout ok"><div><b>Everything is verified</b><p>No payments are waiting for you.</p></div></div>`}
-    <div class="kpis">${kpiLink('kpi-collected', 'Collected in ' + yr, money(sum(inY)), `${inY.length} verified payments`, 'hot')}${kpiLink('kpi-spent', 'Spent in ' + yr, money(sum(exY)), `${exY.length} items`)}${kpiLink('kpi-balance', 'Village balance', money(sum(ver) - sum(ex)), 'All income less all spending', 'good')}${kpiLink('goto', 'Members behind', String(behind.length), `${money(sum(behind, 'o'))} outstanding. Tap to see who`, behind.length ? 'bad' : '', ' data-page="outstanding"')}</div>
+    <div class="kpis">${kpiLink('kpi-collected', 'Collected in ' + yr, money(sum(inY)), `${inY.length} verified payments`, 'hot')}${kpiLink('kpi-spent', 'Spent in ' + yr, money(sum(exY)), `${exY.length} items`)}${kpiLink('kpi-balance', balLabel(), money(sum(ver) - sum(ex)), 'All income less all spending', 'good')}${kpiLink('goto', 'Members behind', String(behind.length), `${money(sum(behind, 'o'))} outstanding. Tap to see who`, behind.length ? 'bad' : '', ' data-page="outstanding"')}</div>
     <div class="grid-2"><section class="panel"><div class="panel-h"><div><h2>Collections, last 12 months</h2><p>Verified payments only</p></div></div>${barChart(monthlySeries(ver))}</section>
     <section class="panel"><div class="panel-h"><h2>Income by levy in ${yr}</h2></div>${donut(levyAll().map(l => ({ label: l.name, color: l.color, value: sum(inY.filter(t => t.levy === l.id)) })))}</section></div>
     ${paymentPanel()}
@@ -1242,7 +1250,7 @@ function logout() {
 /* ---------- Events ---------- */
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]'); if (el) {
-    const fn = ACTIONS[el.dataset.act]; if (fn) { try { fn(el, e); } catch (ex) { toast(ex.message || 'Something went wrong.', 'err'); } }
+    const fn = ACTIONS[el.dataset.act]; if (fn) { try { fn(el, e); } catch (ex) { if (ex && ex.upgrade && typeof upgradeModal === 'function') upgradeModal(ex.feature); else toast(ex.message || 'Something went wrong.', 'err'); } }
     return;
   }
   if (e.target.id === 'modalRoot') closeModal();
@@ -1958,15 +1966,15 @@ Object.assign(ACTIONS, {
    ========================================================= */
 function owingList(yr, f) {
   f = f || {}; const q = (f.q || '').toLowerCase();
-  return S.v.users.filter(u => u.role === 'member' && u.active && (!f.kin || u.kindred === f.kin) && (!q || u.name.toLowerCase().includes(q) || u.id.toLowerCase().includes(q)))
-    .map(u => { const rows = owingRows(u.id, yr); return { u, rows, owe: sum(rows, 'owe') }; })
+  return S.v.users.filter(u => (u.role === 'member' || u.role === 'admin') && u.active && (!f.kin || u.kindred === f.kin) && (!q || u.name.toLowerCase().includes(q) || u.id.toLowerCase().includes(q)))
+    .map(u => { const rows = owingRowsAll(u.id, yr); return { u, rows, owe: sum(rows, 'owe') }; })
     .filter(x => x.owe > 0 && (!f.levy || x.rows.some(r => r.L.id === f.levy && r.owe > 0))).sort((a, b) => b.owe - a.owe);
 }
 function reminderText(it, yr) {
   const lines = it.rows.filter(r => r.owe > 0).map(r => `- ${r.L.name}: ${money(r.owe)}`).join('\n'), acc = (S.v.settings.accounts || []).map(a => `${a.bank}, ${a.number}, ${a.name}`).join('\n');
   return `Dear ${it.u.name.split(' ')[0]}, this is a payment reminder from ${S.v.name}.\nStill unpaid for ${yr}:\n${lines}\nTotal: ${money(it.owe)}\n\nPay to:\n${acc || '(ask your admin for the account)'}\n\nAfter paying, sign in to VillageVault, choose ${S.v.name} and upload your proof of payment.`;
 }
-const itemFor = (id, yr) => { const u = userById(id), rows = owingRows(id, yr); return { u, rows, owe: sum(rows, 'owe') }; };
+const itemFor = (id, yr) => { const u = userById(id), rows = owingRowsAll(id, yr); return { u, rows, owe: sum(rows, 'owe') }; };
 
 /* ----- Notice PDF (one page per member, with payment instructions) ----- */
 function wrapText(pdf, s, maxW, size, bold) {
@@ -2066,7 +2074,7 @@ Object.assign(ACTIONS, {
   },
   'kpi-balance'() {
     const inc = sum(villageTx()), spent = sum(activeExp());
-    infoModal('Village balance', 'All verified income less all recorded spending', `${table(['', { t: 'Amount', num: true }, ''], [['Verified income, all time', money(inc), '<button class="btn btn-ghost btn-sm" type="button" data-act="tx-filter" data-id="">See income</button>'], ['Spending, all time', money(spent), '<button class="btn btn-ghost btn-sm" type="button" data-act="exp-filter" data-id="">See spending</button>'], ['<b>Balance</b>', `<b>${money(inc - spent)}</b>`, '']]).replace(/<td class="num"><button/g, '<td><button')}
+    infoModal(balLabel(), 'All verified income less all recorded spending', `${table(['', { t: 'Amount', num: true }, ''], [['Verified income, all time', money(inc), '<button class="btn btn-ghost btn-sm" type="button" data-act="tx-filter" data-id="">See income</button>'], ['Spending, all time', money(spent), '<button class="btn btn-ghost btn-sm" type="button" data-act="exp-filter" data-id="">See spending</button>'], ['<b>Balance</b>', `<b>${money(inc - spent)}</b>`, '']]).replace(/<td class="num"><button/g, '<td><button')}
     <div class="sec-title">Waiting for verification</div><p class="muted">${money(sum(pendingTx()))} from ${pendingTx().length} payment${pendingTx().length === 1 ? '' : 's'} is not in the balance yet.</p><div class="btn-row"><button class="btn btn-primary btn-sm" type="button" data-act="go-page" data-page="verify">Review payments</button><button class="btn btn-ghost btn-sm" type="button" data-act="go-page" data-page="reports">Open reports</button></div>`, 'modal-lg');
   },
   'my-owing'() {
@@ -2341,7 +2349,7 @@ Object.assign(API, {
   },
   addPledge(d) {
     requireAdmin(); const u = userById(d.memberId);
-    if (!u || u.role !== 'member') throw new Error('Choose the member who made the pledge.');
+    if (!u || (u.role !== 'member' && u.role !== 'admin')) throw new Error('Choose the member who made the pledge.');
     if (!(d.amount > 0)) throw new Error('Enter the pledged amount.'); if ((d.purpose || '').length < 3) throw new Error('Say what the pledge is for.');
     if (!levies().some(l => l.id === d.levy)) throw new Error('Choose the category the money will be recorded under.');
     const p = { id: nextId('pl', 'P'), memberId: u.id, amount: d.amount, levy: d.levy, purpose: d.purpose, date: d.date, due: d.due || '', note: d.note || '', status: 'open', createdBy: S.u.name, createdById: S.u.id, createdAt: stamp(), history: [] };
@@ -2440,7 +2448,7 @@ function pledgeDetail(id) {
   infoModal('Pledge: ' + p.purpose, `${esc(nameOf(p.memberId))}, ${esc(p.memberId)}`,
     `<div class="kpis kpis-3" style="margin-top:14px">${kpi('Pledged', money(p.amount), fmtDate(p.date))}${kpi('Paid', money(pledgePaid(p)), pledgeWaiting(p) ? money(pledgeWaiting(p)) + ' waiting for verification' : '', 'good')}${kpi('Balance', money(pledgeBal(p)), p.due ? 'Promised by ' + fmtDate(p.due) : '', pledgeBal(p) ? 'bad' : '')}</div>
     <dl class="kv"><dt>Status</dt><dd>${pledgeBadge(p)}</dd><dt>Recorded under</dt><dd>${esc(levyOf(p.levy).name)}</dd><dt>Registered by</dt><dd>${esc(p.createdBy)}, ${esc(fmtTS(p.createdAt))}</dd>${p.note ? `<dt>Note</dt><dd>${esc(p.note)}</dd>` : ''}${p.cancelReason ? `<dt>Cancelled because</dt><dd>${esc(p.cancelReason)}</dd>` : ''}</dl>
-    ${admin && p.status !== 'cancelled' ? `<div class="btn-row">${pledgeBal(p) ? `<button class="btn btn-primary btn-sm" type="button" data-act="pay-pledge" data-id="${esc(p.id)}">Record a payment</button>` : ''}<button class="btn btn-ghost btn-sm" type="button" data-act="edit-pledge" data-id="${esc(p.id)}">Edit</button><button class="btn btn-ghost btn-sm" type="button" data-act="cancel-pledge" data-id="${esc(p.id)}">Cancel pledge</button></div>` : ''}
+    ${admin && p.status !== 'cancelled' ? `<div class="btn-row">${pledgeBal(p) ? `<button class="btn btn-primary btn-sm" type="button" data-act="pay-pledge" data-id="${esc(p.id)}">Record a payment</button><button class="btn btn-leaf btn-sm" type="button" data-act="pledge-remind" data-id="${esc(p.id)}">Send reminder</button>` : ''}<button class="btn btn-ghost btn-sm" type="button" data-act="edit-pledge" data-id="${esc(p.id)}">Edit</button><button class="btn btn-ghost btn-sm" type="button" data-act="cancel-pledge" data-id="${esc(p.id)}">Cancel pledge</button></div>` : ''}
     ${!admin && pledgeBal(p) && p.status !== 'cancelled' ? `<div class="btn-row"><button class="btn btn-primary btn-sm" type="button" data-act="upload-proof" data-pre="P:${esc(p.id)}">Pay towards this pledge</button></div>` : ''}
     <div class="sec-title">Payments towards it</div>${table(['Date', 'Amount', 'Status'], txs.map(t => [esc(fmtDate(t.date)), money(t.amount), badge(t.status)]), ['No payments yet', 'Payments made towards this pledge will show here.'])}`);
 }
@@ -2461,7 +2469,7 @@ ADMIN.pledges = function () {
   return `<div class="kpis kpis-3">${kpi('Pledged', money(pledged), `${live.length} pledges`)}${kpi('Received', money(got), 'Verified payments', 'good')}${kpi('Still to receive', money(Math.max(0, pledged - got)), 'Follow up with members', pledged - got > 0 ? 'bad' : '')}</div>
   <section class="panel"><div class="panel-h"><div><h2>Member pledges</h2><p>Register what a member promises. It shows on their dashboard, and payments update it after you verify them.</p></div><button class="btn btn-primary btn-sm" type="button" data-act="add-pledge">Register a pledge</button></div>
   <div class="toolbar"><div class="field"><label for="plS">Show</label><select id="plS" class="select" data-filter="pst">${opt('', 'All pledges', st)}${opt('open', 'Not yet paid', st)}${opt('part', 'Part paid', st)}${opt('paid', 'Fulfilled', st)}${opt('cancelled', 'Cancelled', st)}</select></div></div>
-  ${table(['Member', 'Pledge', 'Date', { t: 'Pledged', num: true }, { t: 'Paid', num: true }, { t: 'Balance', num: true }, 'Status', ''], page.map(p => [`${linkBtn('member-profile', p.memberId, nameOf(p.memberId))}<small>${esc(p.memberId)}</small>`, `${linkBtn('view-pledge', p.id, p.purpose)}<small>${esc(levyOf(p.levy).name)}</small>`, esc(fmtDate(p.date)), money(p.amount), money(pledgePaid(p)), money(pledgeBal(p)), pledgeBadge(p), `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="view-pledge" data-id="${esc(p.id)}">Open</button>${p.status !== 'cancelled' && pledgeBal(p) ? `<button class="btn btn-leaf btn-sm" type="button" data-act="pay-pledge" data-id="${esc(p.id)}">Record payment</button>` : ''}</div>`]), ['No pledges yet', 'When a member promises money, register it here so it shows on their dashboard.'])}${pager(list.length, f.page, CONFIG.PER_PAGE)}</section>`;
+  ${table(['Member', 'Pledge', 'Date', { t: 'Pledged', num: true }, { t: 'Paid', num: true }, { t: 'Balance', num: true }, 'Status', ''], page.map(p => [`${linkBtn('member-profile', p.memberId, nameOf(p.memberId))}<small>${esc(p.memberId)}</small>`, `${linkBtn('view-pledge', p.id, p.purpose)}<small>${esc(levyOf(p.levy).name)}</small>`, esc(fmtDate(p.date)), money(p.amount), money(pledgePaid(p)), money(pledgeBal(p)), pledgeBadge(p), `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="view-pledge" data-id="${esc(p.id)}">Open</button>${p.status !== 'cancelled' && pledgeBal(p) ? `<button class="btn btn-leaf btn-sm" type="button" data-act="pay-pledge" data-id="${esc(p.id)}">Record payment</button><button class="btn btn-primary btn-sm" type="button" data-act="pledge-remind" data-id="${esc(p.id)}">Send reminder</button>` : ''}</div>`]), ['No pledges yet', 'When a member promises money, register it here so it shows on their dashboard.'])}${pager(list.length, f.page, CONFIG.PER_PAGE)}</section>`;
 };
 VIEWS.admin.pledges = ADMIN.pledges;
 Object.assign(ACTIONS, {
@@ -2651,7 +2659,7 @@ function membershipStrip() {
   const u = S.u, yrs = Math.floor((Date.now() - new Date(u.joined).getTime()) / (365.25 * 864e5));
   return `<div class="member-strip"><div><small>Member since</small><b>${esc(fmtDate(u.joined))}</b></div><div><small>Your ID</small><b class="mono">${esc(u.id)}</b></div>${isVillageType() && kinOf(u) ? `<div><small>Family and kindred</small><b>${esc(kinOf(u))}</b></div>` : ''}<div><small>Time with us</small><b>${yrs >= 1 ? yrs + (yrs === 1 ? ' year' : ' years') : 'Under a year'}</b></div></div>`;
 }
-const premiumBadge = '<span class="badge b-admin">Premium</span>';
+const premiumBadge = '<span class="badge b-admin prem-badge" role="button" tabindex="0" data-act="upgrade-info" title="See what Premium adds and upgrade">Premium</span>';
 function capNotice() {
   if (S.v.plan === 'premium') return '';
   const n = activeMembers(), CAP = basicCap(), left = CAP - n;
@@ -2659,9 +2667,10 @@ function capNotice() {
   if (left <= 3) return `<div class="callout upgrade"><div><b>${premiumBadge} ${left} member place${left === 1 ? '' : 's'} left on the Basic plan</b><p>Basic covers up to ${capWords()}. Upgrade to Premium before you reach the limit.</p></div><button class="btn btn-ghost btn-sm" type="button" data-act="upgrade-info">How to upgrade</button></div>`;
   return '';
 }
-function upgradeModal() {
+const upgradeBtn = () => (S.u && !S.owner && S.u.role === 'admin' && S.v && S.v.plan !== 'premium') ? '<div class="btn-row" style="margin-top:14px"><button class="btn btn-saffron" type="button" data-act="upgrade-start">Upgrade to Premium</button></div>' : '';
+function upgradeModal(feature) {
   infoModal('Upgrade to Premium', capReached() ? 'Your Basic plan is full' : 'What Premium adds', `<div class="upgrade-box"><div class="up-badge">${premiumBadge}</div><p>The Basic plan covers up to <b>${capWords()}</b> and you have ${activeMembers()} here. Premium removes the limit and adds:</p>
-  <ul class="ticks"><li>No member limit</li><li>Professional letterhead receipts with the Chairman and Financial Secretary signatures</li><li>Your village name, code and logo on every document</li><li>One-click WhatsApp broadcast to members who owe</li><li>Meeting minutes: the Secretary writes, the Chairman approves, both sign</li><li>No VillageVault watermark on documents</li></ul><p class="hint">Ask VillageVault support to move your village or association to Premium. Your records stay exactly as they are.</p></div>`);
+  <ul class="ticks"><li>No member limit</li><li>Professional letterhead receipts with the Chairman and Financial Secretary signatures</li><li>Your village name, code and logo on every document</li><li>One-click WhatsApp broadcast to members who owe</li><li>Meeting minutes: the Secretary writes, the Chairman approves, both sign</li><li>No VillageVault watermark on documents</li></ul><p class="hint">Your records stay exactly as they are when you move to Premium.</p>${upgradeBtn()}</div>`);
 }
 Object.assign(ACTIONS, { 'upgrade-info'() { upgradeModal(); } });
 /* =========================================================
@@ -2706,7 +2715,7 @@ Object.assign(API, {
     log('Updated letterhead signatory', u.id, `${u.name} (${u.title}): ${ch.join('; ')}`); commit();
   },
   logBroadcast(n) {
-    if (!isChairman()) throw new Error('Only the Chairman can send a broadcast.'); if (S.v.plan !== 'premium') throw new Error('WhatsApp broadcast is part of the Premium plan.');
+    if (!canRemind()) throw new Error('Only the Chairman or the Financial Secretary can send a broadcast.'); if (S.v.plan !== 'premium') throw new Error('WhatsApp broadcast is part of the Premium plan.');
     log('Sent WhatsApp broadcast', 'Outstanding bills', `Reminder opened for ${n} member${n === 1 ? '' : 's'} who owe`); commit();
   }
 });
@@ -2838,12 +2847,13 @@ Object.assign(ACTIONS, {
 
 /* ---------- WhatsApp broadcast (Chairman only, Premium) ---------- */
 const isChairman = () => !!S.u && !S.owner && S.u.id !== 'SUPPORT' && S.u.role === 'admin' && S.u.title === 'Chairman';
-const broadcastBtn = () => isChairman() ? `<button class="btn btn-leaf btn-sm" type="button" data-act="wa-broadcast">WhatsApp broadcast${S.v.plan === 'premium' ? '' : ' ' + premiumBadge}</button>` : '';
-function featureModal(name) { infoModal('Premium feature', name, `<div class="upgrade-box"><div class="up-badge">${premiumBadge}</div><p><b>${esc(name)}</b> is part of the Premium plan. Ask VillageVault support to move your village or association to Premium. Your records stay exactly as they are.</p></div>`); }
+const canRemind = () => isChairman() || (typeof isFinSec === 'function' && isFinSec());
+const broadcastBtn = () => canRemind() ? `<button class="btn btn-leaf btn-sm" type="button" data-act="wa-broadcast">WhatsApp broadcast${S.v.plan === 'premium' ? '' : ' ' + premiumBadge}</button>` : '';
+function featureModal(name) { infoModal('Premium feature', name, `<div class="upgrade-box"><div class="up-badge">${premiumBadge}</div><p><b>${esc(name)}</b> is part of the Premium plan. Upgrade to switch it on. Your records stay exactly as they are.</p>${upgradeBtn()}</div>`); }
 let BC = null;
 Object.assign(ACTIONS, {
   'wa-broadcast'() {
-    if (!isChairman()) return toast('Only the Chairman can send a broadcast.', 'err');
+    if (!canRemind()) return toast('Only the Chairman or the Financial Secretary can send a broadcast.', 'err');
     if (S.v.plan !== 'premium') return featureModal('One-click WhatsApp broadcast');
     const yr = new Date().getFullYear(), list = owingList(yr, S.f).filter(it => waNum(it.u.phone).length >= 12);
     if (!list.length) return toast('Nobody who owes has a phone number on record.', 'err');
@@ -2854,7 +2864,7 @@ Object.assign(ACTIONS, {
     ${table(['Member', { t: 'Owes', num: true }, 'Status'], list.map((it, i) => [esc(it.u.name) + `<small>${esc(it.u.phone)}</small>`, money(it.owe), `<span id="bcS${i}" class="muted">Waiting</span>`]), ['', ''])}`);
   },
   'wa-next'() {
-    if (!BC || BC.i >= BC.list.length) return; if (!isChairman() || S.v.plan !== 'premium') return;
+    if (!BC || BC.i >= BC.list.length) return; if (!canRemind() || S.v.plan !== 'premium') return;
     const it = BC.list[BC.i], note = ($('#bcN') && $('#bcN').value || '').trim(), url = waLinkTo(it.u.phone, (note ? note + '\n\n' : '') + reminderText(it, BC.yr));
     const w = window.open(url, '_blank', 'noopener'); if (!w) return toast('Your browser blocked the chat. Allow pop-ups for this site and press the button again.', 'err');
     const s = $('#bcS' + BC.i); if (s) { s.textContent = 'Opened'; s.className = 'badge b-verified'; }
@@ -2948,7 +2958,7 @@ const PLAN_RULES = {
 };
 const planKey = v => ((v || S.v || {}).plan === 'premium' ? 'premium' : 'basic');
 const planAllows = (f, v) => !!PLAN_RULES[planKey(v)][f];
-function assertFeature(f, label) { if (!planAllows(f)) throw new Error(`${label} is part of the Premium plan.`); }
+function assertFeature(f, label) { if (!planAllows(f)) { const e = new Error(`${label} is part of the Premium plan.`); e.upgrade = true; e.feature = label; throw e; } }
 const PLAN_REG = { load() { try { return JSON.parse(lsGet('vv_plans_v1') || '{}'); } catch (_) { return {}; } }, save(r) { lsSet('vv_plans_v1', JSON.stringify(r)); } };
 function enforcePlanRegistry(v) {
   const r = PLAN_REG.load();
@@ -3463,6 +3473,7 @@ const AUDIO = {
 };
 const audioKey = m => `${S.v.id}:${m.id}`;
 const REC = { rec: null, chunks: [], blob: null, t0: 0, timer: null, meter: null, stream: null, ctx: null, peak: 0, loud: 0, quiet: 0, frames: 0 };
+function recSay(msg, bad) { const m = $('#recMsg'); if (!m) return; m.textContent = msg; m.style.color = bad ? '#B3261E' : ''; m.style.fontWeight = bad ? '600' : ''; }
 function recVerdict() {
   if (!REC.frames) return 'Play it back before you save it.';
   if (REC.peak < 0.08) return 'This recording is very quiet. Play it back. If you cannot hear people clearly, record again with the device closer to the speakers.';
@@ -3646,10 +3657,10 @@ Object.assign(ACTIONS, {
       <div class="field"><label for="recDev">Microphone</label><select id="recDev" class="select"><option value="">Default microphone</option></select></div>
       <label class="check"><input type="checkbox" id="recClose"> Only one or two people speak, close to the microphone</label>
       <div class="lvl" aria-hidden="true"><i id="recLvl"></i></div><p class="hint" id="recMsg" aria-live="polite">Tip: put the phone or laptop in the middle of the table. Use the device's own microphone, not a Bluetooth headset (those record thin, muffled sound). Switch off music and fans, and keep it away from other phones, which cause buzzing.</p>
-      <div class="field"><label for="mnF">Or choose an audio file</label><input id="mnF" name="file" type="file" accept="audio/*"></div><p class="hint">Audio stays in this browser on this device (up to 25 MB, recordings stop at 20 minutes). A backend will keep it safely later.</p><div id="recOut"></div>`,
+      <div class="field"><label for="mnF">Or choose an audio file</label><input id="mnF" name="file" type="file" accept="audio/*"></div><div class="field"><label for="mnR2">Or record with your phone's own recorder</label><input id="mnR2" name="file2" type="file" accept="audio/*" capture><span class="hint">On a phone this opens the voice recorder app. It works even where the browser blocks the microphone.</span></div><p class="hint">Audio stays in this browser on this device (up to 25 MB, recordings stop at 20 minutes). A backend will keep it safely later.</p><div id="recOut"></div>`,
       onSubmit: async fd => {
         if (!fd.get('consent')) throw new Error('Confirm that everyone present knows about the recording.');
-        let blob = REC.blob; const f = fd.get('file'); if (f && f.size) blob = f;
+        let blob = REC.blob; const f = fd.get('file'), f2 = fd.get('file2'); if (f2 && f2.size) blob = f2; if (f && f.size) blob = f;
         if (!blob) throw new Error('Record the meeting or choose an audio file first.');
         if (blob.size > 25 * 1048576) throw new Error('That audio is over 25 MB. Record a shorter part or compress it.');
         if (!/^audio\//.test(blob.type || '')) throw new Error('Choose an audio file.');
@@ -3662,13 +3673,15 @@ Object.assign(ACTIONS, {
        people as "noise" and chop up distant voices. Here those are off, the voice band is cleaned (rumble and hum cut), quiet speakers are
        lifted with a gentle compressor, and the file is saved as 96 kbps Opus (AAC on Safari) instead of the low default. */
     try {
-      if (!window.MediaRecorder || !navigator.mediaDevices) throw new Error('nomic');
+      recSay('Starting the microphone. If the browser asks, choose Allow.', false);
+      const early = (() => { try { const AC = window.AudioContext || window.webkitAudioContext; const c = new AC(); c.resume && c.resume(); return c; } catch (_) { return null; } })();   // made inside the click so Safari and phones let it run
+      if (!window.MediaRecorder || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { const e0 = new Error('nomic'); e0.name = window.isSecureContext === false ? 'Insecure' : 'NoSupport'; throw e0; }
       const dev = ($('#recDev') || {}).value, room = !$('#recClose') || !$('#recClose').checked;
       const base = { channelCount: 1, sampleRate: 48000, echoCancellation: false, noiseSuppression: false, autoGainControl: room };
       let st; try { st = await navigator.mediaDevices.getUserMedia({ audio: dev ? Object.assign({ deviceId: { exact: dev } }, base) : base }); } catch (e1) { if (e1 && /Permission|NotAllowed|NotFound/.test(e1.name || '')) throw e1; st = await navigator.mediaDevices.getUserMedia({ audio: true }); }
       recReset(); REC.stream = st; let src = st, ctx = null, an = null;
       try {
-        const AC = window.AudioContext || window.webkitAudioContext; ctx = new AC(); await ctx.resume();
+        ctx = early; if (!ctx) throw new Error('noaudioctx'); await ctx.resume(); if (ctx.state !== 'running') throw new Error('suspended');
         const input = ctx.createMediaStreamSource(st), hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 90;
         const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 12000;
         const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -34; comp.knee.value = 24; comp.ratio.value = 3.5; comp.attack.value = 0.01; comp.release.value = 0.25;
@@ -3684,7 +3697,16 @@ Object.assign(ACTIONS, {
       r.start(1000); $('#recGo').disabled = true; $('#recStop').disabled = false;
       if (an) { const buf = new Uint8Array(an.fftSize); REC.meter = setInterval(() => { an.getByteTimeDomainData(buf); let pk = 0; for (let i = 0; i < buf.length; i++) pk = Math.max(pk, Math.abs(buf[i] - 128) / 128); REC.peak = Math.max(REC.peak, pk); REC.frames++; if (pk > 0.97) REC.loud++; if (pk < 0.03) REC.quiet++; const bar = $('#recLvl'), msg = $('#recMsg'); if (bar) bar.style.width = Math.min(100, Math.round(pk * 140)) + '%'; if (msg) msg.textContent = pk > 0.97 ? 'Too loud: move the device back a little.' : pk < 0.03 ? 'Very quiet: move the device closer to the speakers.' : 'Level is good.'; }, 150); }
       REC.timer = setInterval(() => { const s = Math.floor((Date.now() - REC.t0) / 1000), t = $('#recT'); if (t) t.textContent = `${Math.floor(s / 60)}:${pad(s % 60)}`; if (s >= 1200) ACTIONS['rec-stop'](); }, 500);
-    } catch (e) { toast(e && /Permission|NotAllowed/.test(e.name || '') ? 'The microphone is blocked. Allow it in the browser address bar, or choose an audio file instead.' : 'The microphone could not be opened. You can choose an audio file instead.', 'err'); }
+    } catch (e) {
+      const nm = (e && e.name) || '', inFrame = (() => { try { return window.self !== window.top; } catch (_) { return true; } })();
+      const why = nm === 'Insecure' ? 'This page is not on a secure (https) address, so the browser blocks the microphone. Open the site from its https address.'
+        : nm === 'NoSupport' ? 'This browser cannot record from the microphone. Use the phone recorder option below, or choose an audio file.'
+        : /NotAllowed|Permission|Security/.test(nm) ? (inFrame ? 'The microphone is blocked because this page is shown inside another page (a preview). Open the site in its own browser tab and try again.' : 'The microphone is blocked. Tap the lock or microphone icon in the address bar, choose Allow, then press Start again.')
+        : /NotFound|Devices/.test(nm) ? 'No microphone was found. Plug one in, or use the phone recorder option below.'
+        : /NotReadable|Abort/.test(nm) ? 'The microphone is busy in another app. Close the other app and try again.'
+        : 'The microphone could not be started. Use the phone recorder option below, or choose an audio file.';
+      recSay(why, true); toast(why, 'err'); const g = $('#recGo'), s = $('#recStop'); if (g) g.disabled = false; if (s) s.disabled = true; try { if (early && early.state !== 'closed') early.close(); } catch (_) {}
+    }
   },
   'rec-stop'() { try { if (REC.rec && REC.rec.state !== 'inactive') REC.rec.stop(); } catch (_) {} }
 });
@@ -3899,6 +3921,164 @@ Object.assign(ACTIONS, {
   }
 });
 (async function bioInit() { const b = $('#bioBtn'); if (b && (await bioPlatformReady())) b.hidden = false; })();
+/* =========================================================
+   ROUND 13: pledge reminders, owner live view (who is online), and the upgrade request flow.
+   Front end only: requests, presence and payment settings live in this browser (keys vv_upgrades_v1, vv_presence_v1,
+   vv_upgrade_cfg_v1). The backend later moves them to the database and Paystack's webhook, so activation can be automatic.
+   ========================================================= */
+
+/* ---------- Pledge reminder: PDF and WhatsApp ---------- */
+function pledgeRemindText(p) {
+  const u = userById(p.memberId) || { name: 'member' }, acc = (S.v.settings.accounts || []).map(a => `${a.bank}, ${a.number}, ${a.name}`).join('\n');
+  return `Dear ${u.name.split(' ')[0]}, this is a reminder from ${S.v.name}.\nYou pledged ${money(p.amount)} on ${fmtDate(p.date)} for "${p.purpose}"${p.due ? ' (promised by ' + fmtDate(p.due) + ')' : ''}.\nPaid so far: ${money(pledgePaid(p))}\nBalance: ${money(pledgeBal(p))}\n\nPay to:\n${acc || '(ask your admin for the account)'}\n\nAfter paying, sign in to VillageVault and upload your proof of payment.`;
+}
+const pledgeItem = p => { const u = userById(p.memberId), yr = new Date().getFullYear(), rows = owingRowsAll(p.memberId, yr).filter(r => r.pledgeId === p.id); return { u, rows, owe: sum(rows, 'owe') }; };
+Object.assign(ACTIONS, {
+  'pledge-remind'(el) {
+    requireAdmin(); const p = getPledge(el.dataset.id), u = userById(p.memberId);
+    if (p.status === 'cancelled' || !pledgeBal(p)) return toast('This pledge has nothing left to pay.', 'ok');
+    const wa = waLinkTo(u && u.phone, pledgeRemindText(p));
+    infoModal('Pledge reminder', `${esc(nameOf(p.memberId))}: ${money(pledgeBal(p))} still to pay`, `<pre class="remind-text">${esc(pledgeRemindText(p))}</pre>
+      <div class="btn-row"><button class="btn btn-primary" type="button" data-act="pledge-remind-pdf" data-id="${esc(p.id)}">Download reminder (PDF)</button>${wa ? `<a class="btn btn-leaf" href="${esc(wa)}" target="_blank" rel="noopener noreferrer" data-act="pledge-remind-wa" data-id="${esc(p.id)}">Send on WhatsApp</a>` : '<span class="hint">No phone number on record, so WhatsApp is not available.</span>'}</div>
+      <p class="hint">WhatsApp cannot attach a file from a link. Download the PDF first, then attach it in the chat that opens.</p>`);
+  },
+  'pledge-remind-pdf'(el) { requireAdmin(); const p = getPledge(el.dataset.id), it = pledgeItem(p); if (!it.u || !(it.owe > 0)) return toast('Nothing left to pay on this pledge.', 'ok'); download(`Pledge-reminder-${p.id}.pdf`, noticePdf([it], new Date().getFullYear())); try { API.logNotice([it.u.id], 'Pledge reminder PDF downloaded'); } catch (_) {} toast('Reminder downloaded. Attach it in WhatsApp.', 'ok'); },
+  'pledge-remind-wa'(el) { try { API.logNotice([getPledge(el.dataset.id).memberId], 'Pledge reminder opened in WhatsApp'); } catch (_) {} }
+});
+
+/* ---------- Who is online (heard from every signed-in browser tab) ---------- */
+const PRES_KEY = 'vv_presence_v1', PRES_TTL = 40000;
+const presRead = () => { try { return JSON.parse(lsGet(PRES_KEY) || '{}') || {}; } catch (_) { return {}; } };
+function presBeat() {
+  if (!S.u || S.owner || !S.v || S.u.id === 'SUPPORT') return;
+  const o = presRead(), k = `${S.v.id}|${S.u.id}`, old = o[k];
+  o[k] = { vid: S.v.id, vn: S.v.name, uid: S.u.id, name: S.u.name, role: S.u.role === 'admin' ? (S.u.title || 'Admin') : 'Member', page: S.page, at: Date.now(), since: (old && Date.now() - old.at < PRES_TTL * 3) ? old.since : Date.now() };
+  Object.keys(o).forEach(x => { if (Date.now() - o[x].at > PRES_TTL * 6) delete o[x]; });
+  lsSet(PRES_KEY, JSON.stringify(o));
+}
+function presGone() { if (!S.u || !S.v) return; const o = presRead(); delete o[`${S.v.id}|${S.u.id}`]; lsSet(PRES_KEY, JSON.stringify(o)); }
+const presOnline = () => Object.values(presRead()).filter(x => Date.now() - x.at < PRES_TTL).sort((a, b) => a.vn.localeCompare(b.vn) || a.name.localeCompare(b.name));
+setInterval(() => { try { presBeat(); if (S.owner && !S.v && (S.page === 'o-live') && $('#modalRoot').hidden) renderView(); } catch (_) {} }, 5000);
+window.addEventListener('beforeunload', () => { try { presGone(); } catch (_) {} });
+{ const _lo = logout; logout = function () { try { presGone(); } catch (_) {} return _lo.apply(this, arguments); }; }
+{ const _rv = renderView; renderView = function () { const r = _rv.apply(this, arguments); try { presBeat(); } catch (_) {} return r; }; }
+const ago = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)} min` : `${Math.floor(s / 3600)} h ${Math.floor(s % 3600 / 60)} min`; };
+OWNERV['o-live'] = function () {
+  const on = presOnline(), vils = new Set(on.map(x => x.vid)).size;
+  const acts = []; Object.values(DB.cache).forEach(v => (v.audit || []).slice(-25).forEach(a => acts.push({ v, a })));
+  acts.sort((x, y) => y.a.ts.localeCompare(x.a.ts));
+  return `<div class="kpis kpis-3">${kpi('Online now', String(on.length), on.length ? 'Signed in and active in the last 40 seconds' : 'Nobody is signed in right now', on.length ? 'good' : '')}${kpi('Villages and associations active', String(vils), 'With someone online')}${kpi('Actions today', String(acts.filter(x => x.a.ts.slice(0, 10) === today()).length), 'Across every village')}</div>
+  <section class="panel"><div class="panel-h"><div><h2>Who is online</h2><p>Updates by itself every few seconds. Until the backend is added this shows people signed in on this device's browser.</p></div></div>
+  ${table(['Person', 'Role', 'Village or association', 'Viewing', 'Online for'], on.map(x => [`<b>${esc(x.name)}</b><small>${esc(x.uid)}</small>`, esc(x.role), esc(x.vn), esc(TITLES[x.page] || x.page || '-'), esc(ago(Date.now() - x.since))]), ['Nobody online', 'People appear here the moment they sign in and disappear when they sign out or close the page.'])}</section>
+  <section class="panel"><div class="panel-h"><div><h2>Latest activity</h2><p>The newest actions by admins in every village and association.</p></div></div>
+  ${table(['When', 'Village', 'Admin', 'Action', 'Details'], acts.slice(0, 40).map(x => [`<span class="nowrap">${esc(fmtTS(x.a.ts))}</span>`, esc(x.v.name), esc(x.a.adminName || '-'), esc(x.a.action), esc(x.a.detail || '')]), ['No activity yet', 'Admin actions will appear here.'])}</section>`;
+};
+
+/* ---------- Upgrade requests ---------- */
+const UPG = {
+  key: 'vv_upgrades_v1', cfgKey: 'vv_upgrade_cfg_v1',
+  load() { try { return JSON.parse(lsGet(this.key) || '[]') || []; } catch (_) { return []; } },
+  save(l) { lsSet(this.key, JSON.stringify(l)); },
+  cfg() { const d = { price: '', bank: '', number: '', name: '', paystack: '', note: '' }; try { return Object.assign(d, JSON.parse(lsGet(this.cfgKey) || '{}')); } catch (_) { return d; } },
+  saveCfg(c) { lsSet(this.cfgKey, JSON.stringify(c)); },
+  pending() { return this.load().filter(r => r.status === 'pending'); },
+  forOrg(pid) { return this.load().filter(r => r.pid === pid).sort((a, b) => b.at.localeCompare(a.at)); }
+};
+Object.assign(API, {
+  async requestUpgrade(d) {
+    requireAdmin(); if (S.v.plan === 'premium') throw new Error('This village or association is already on Premium.');
+    const pid = baseId(S.v.id), l = UPG.load();
+    if (l.some(r => r.pid === pid && r.status === 'pending')) throw new Error('An upgrade request is already waiting for the owner.');
+    if (!['manual', 'paystack'].includes(d.method)) throw new Error('Choose how you paid.');
+    if (!(d.amount > 0)) throw new Error('Enter the amount you paid.'); if (!d.date) throw new Error('Choose the date you paid.');
+    if (d.method === 'manual' && !d.proof) throw new Error('Upload your proof of payment (a photo of the slip or a PDF).');
+    if (d.method === 'paystack' && (d.ref || '').length < 4 && !d.proof) throw new Error('Enter the Paystack reference from your payment receipt, or upload the receipt.');
+    const vil = vilById(pid) || { name: S.v.name, code: S.v.code, type: S.v.type };
+    const r = { id: 'U' + Date.now().toString(36) + Math.floor(Math.random() * 1000), pid, orgName: vil.name, code: vil.code, type: vil.type || 'village', from: S.v.name, byId: S.u.id, byName: S.u.name, byTitle: S.u.title || 'Admin', method: d.method, amount: Number(d.amount), date: d.date, ref: (d.ref || '').trim(), note: (d.note || '').trim(), proof: d.proof || null, at: stamp(), status: 'pending' };
+    l.push(r); UPG.save(l); log('Requested Premium upgrade', r.id, `${money(r.amount)} by ${d.method === 'paystack' ? 'Paystack' : 'bank transfer'}. Waiting for the owner to confirm`); commit(); return r;
+  }
+});
+Object.assign(OWNER_API, {
+  decideUpgrade(id, decision, note) {
+    requireOwner(); const l = UPG.load(), r = l.find(x => x.id === id); if (!r) throw new Error('Request not found.'); if (r.status !== 'pending') throw new Error('This request was already decided.');
+    if (decision === 'activate') {
+      const v = DB.cache[r.pid]; if (v && v.plan !== 'premium') OWNER_API.manageVillage(r.pid, { plan: 'premium', note: `Upgrade request ${r.id}: payment checked` + (note ? '. ' + note : '') });
+      else setRegistryPlan(r.pid, 'premium');
+      r.status = 'activated';
+    } else { if ((note || '').trim().length < 3) throw new Error('Give a short reason so the admin knows what to fix.'); r.status = 'rejected'; }
+    r.decidedAt = stamp(); r.decision = (note || '').trim(); UPG.save(l);
+    olog(decision === 'activate' ? 'Premium activated' : 'Upgrade request declined', r.orgName, `${r.id}: ${money(r.amount)} by ${r.method}${note ? '. ' + note : ''}`); OWN.save();
+  }
+});
+function upgradeStatusBox(pid) {
+  const last = UPG.forOrg(pid)[0]; if (!last) return '';
+  if (last.status === 'pending') return `<div class="callout upgrade"><div><b>Your upgrade request is waiting for the owner</b><p>Sent ${esc(fmtTS(last.at))} by ${esc(last.byName)}. The owner checks the payment and then switches Premium on. This page updates by itself.</p></div></div>`;
+  if (last.status === 'rejected') return `<div class="callout warn"><div><b>Your last upgrade request was not accepted</b><p>${esc(last.decision || 'No reason given.')} You can send a new request below.</p></div></div>`;
+  return '';
+}
+function upgradeRequestModal() {
+  if (!S.u || S.owner) return toast('Sign in as a village or association admin to upgrade.', 'err');
+  if (S.u.role !== 'admin') return infoModal('Upgrade to Premium', 'Ask your admin', '<p class="hint" style="margin-top:12px">Only an admin can upgrade. Ask your admin to open Plans and choose Upgrade.</p>');
+  if (S.v.plan === 'premium') return toast('Already on Premium.', 'ok');
+  const c = UPG.cfg(), pid = baseId(S.v.id), pend = UPG.forOrg(pid)[0] && UPG.forOrg(pid)[0].status === 'pending', refCode = `PREMIUM-${baseId(S.v.id).toUpperCase().slice(0, 8)}`;
+  const acct = c.number ? `<dl class="kv"><dt>Bank</dt><dd>${esc(c.bank)}</dd><dt>Account number</dt><dd class="mono">${esc(c.number)}</dd><dt>Account name</dt><dd>${esc(c.name)}</dd><dt>Use this reference</dt><dd class="mono">${esc(refCode)}</dd></dl>` : '<p class="hint">The owner has not entered the bank account yet. Contact VillageVault support for the account details.</p>';
+  openModal({ title: 'Upgrade to Premium', size: 'modal-lg', sub: `${esc(S.v.name)}${c.price ? ' · ' + esc(c.price) : ''}`, submit: pend ? false : 'Send upgrade request',
+    body: `${upgradeStatusBox(pid)}${c.note ? `<p class="hint">${esc(c.note)}</p>` : ''}
+    ${pend ? '' : `<div class="sec-title">How will you pay?</div>
+    <div class="radio-row"><label class="check"><input type="radio" name="method" value="manual" checked> Pay manually (bank transfer)</label><label class="check"><input type="radio" name="method" value="paystack"> Pay with Paystack</label></div>
+    <div id="upMan"><div class="sec-title">Pay into this account</div>${acct}</div>
+    <div id="upPay" hidden><div class="sec-title">Pay with Paystack</div>${c.paystack ? `<p><a class="btn btn-leaf" href="${esc(c.paystack)}" target="_blank" rel="noopener noreferrer">Open Paystack payment page</a></p><p class="hint">Pay there, then come back and enter the Paystack reference from your receipt below.</p>` : '<p class="hint">The owner has not added a Paystack payment link yet. Pay by bank transfer instead, or contact support.</p>'}</div>
+    <div class="sec-title">After you have paid</div>
+    <div class="form-row"><div class="field"><label for="upA">Amount paid (naira)</label><input id="upA" name="amount" class="input" type="number" min="1" required></div><div class="field"><label for="upD">Date paid</label><input id="upD" name="date" class="input" type="date" max="${today()}" value="${today()}" required></div></div>
+    <div class="field" id="upRefF"><label for="upR">Reference (the Paystack reference, or the sender name on the transfer)</label><input id="upR" name="ref" class="input" maxlength="60"></div>
+    <div class="field"><label for="upF">Proof of payment <span id="upFreq">(required for bank transfer)</span></label><input id="upF" name="proof" type="file" accept="image/*,application/pdf"></div>
+    <div class="field"><label for="upN">Note for the owner (optional)</label><input id="upN" name="note" class="input" maxlength="140"></div>
+    <p class="hint">The owner is alerted on their dashboard, checks the payment, and then switches Premium on. Your records stay exactly as they are. Automatic activation arrives when the backend and Paystack webhook are connected.</p>`}`,
+    onSubmit: async fd => { const proof = await readProof(fd.get('proof')); await API.requestUpgrade({ method: fd.get('method'), amount: Number(fd.get('amount')), date: fd.get('date'), ref: fd.get('ref'), note: fd.get('note'), proof }); closeModal(); toast('Upgrade request sent. The owner has been alerted.', 'ok'); renderView(); } });
+}
+document.addEventListener('change', e => { const t = e.target; if (t && t.name === 'method' && $('#upMan')) { const pay = t.value === 'paystack'; $('#upMan').hidden = pay; $('#upPay').hidden = !pay; const q = $('#upFreq'); if (q) q.textContent = pay ? '(optional for Paystack)' : '(required for bank transfer)'; } });
+document.addEventListener('keydown', e => { const t = e.target; if ((e.key === 'Enter' || e.key === ' ') && t && t.classList && t.classList.contains('prem-badge')) { e.preventDefault(); t.click(); } });
+ACTIONS['upgrade-start'] = () => { closeModal(); upgradeRequestModal(); };
+{ const _ui = ACTIONS['upgrade-info']; }
+
+/* Owner side */
+NAV.owner.splice(1, 0, ['o-live', 'Live activity', 'clock'], ['o-upgrades', 'Upgrade requests', 'coin']);
+Object.assign(TITLES, { 'o-live': 'Live activity', 'o-upgrades': 'Upgrade requests' });
+{ const _rn = renderNav; renderNav = function () { _rn.apply(this, arguments); try { if (roleKey() === 'owner') { const n = UPG.pending().length, o = presOnline().length, add = (pg, c, cls) => { const b = $(`#navlist [data-page="${pg}"]`); if (b && c) b.insertAdjacentHTML('beforeend', `<span class="count${cls || ''}">${c}</span>`); }; add('o-upgrades', n); add('o-live', o, ' count-soft'); } } catch (_) {} }; }
+OWNERV['o-upgrades'] = function () {
+  const l = UPG.load().sort((a, b) => b.at.localeCompare(a.at)), pend = l.filter(r => r.status === 'pending').length, st = r => r.status === 'pending' ? '<span class="badge b-pending">Waiting</span>' : r.status === 'activated' ? '<span class="badge b-verified">Activated</span>' : '<span class="badge b-rejected">Declined</span>';
+  return `<div class="kpis kpis-3">${kpi('Waiting for you', String(pend), pend ? 'Check the payment, then activate' : 'Nothing waiting', pend ? 'bad' : 'good')}${kpi('Activated', String(l.filter(r => r.status === 'activated').length), 'Premium switched on')}${kpi('Declined', String(l.filter(r => r.status === 'rejected').length), '')}</div>
+  <section class="panel"><div class="panel-h"><div><h2>Upgrade requests</h2><p>An admin pays, uploads proof, and asks for Premium. Verify the money in your bank or Paystack first, then activate.</p></div></div>
+  ${table(['Sent', 'Village or association', 'Asked by', 'Paid by', { t: 'Amount', num: true }, 'Reference', 'Status', ''], l.map(r => [`<span class="nowrap">${esc(fmtTS(r.at))}</span>`, `<b>${esc(r.orgName)}</b><small>${esc(r.code)}${r.from !== r.orgName ? ' · from ' + esc(r.from) : ''}</small>`, `${esc(r.byName)}<small>${esc(r.byTitle)} · ${esc(r.byId)}</small>`, r.method === 'paystack' ? 'Paystack' : 'Bank transfer', money(r.amount) + `<small>${esc(fmtDate(r.date))}</small>`, esc(r.ref || '-'), st(r) + (r.decision ? `<small>${esc(r.decision)}</small>` : ''), `<div class="actions">${r.proof ? `<button class="btn btn-ghost btn-sm" type="button" data-act="upg-proof" data-id="${esc(r.id)}">View proof</button>` : ''}${r.status === 'pending' ? `<button class="btn btn-leaf btn-sm" type="button" data-act="upg-activate" data-id="${esc(r.id)}">Activate</button><button class="btn btn-danger btn-sm" type="button" data-act="upg-decline" data-id="${esc(r.id)}">Decline</button>` : ''}</div>`]), ['No requests yet', 'When an admin asks to upgrade, it appears here and in the menu.'])}</section>`;
+};
+Object.assign(ACTIONS, {
+  'upg-proof'(el) { const r = UPG.load().find(x => x.id === el.dataset.id); if (r && r.proof) infoModal('Proof of payment', `${esc(r.orgName)}, ${money(r.amount)}`, proofHTML(r.proof)); },
+  'upg-activate'(el) {
+    const r = UPG.load().find(x => x.id === el.dataset.id);
+    openModal({ title: `Activate Premium for ${r.orgName}?`, sub: `${money(r.amount)} by ${r.method === 'paystack' ? 'Paystack' : 'bank transfer'}. Only activate after you have seen the money.`, body: `<div class="field"><label for="uaN">Note for your log (optional)</label><input id="uaN" name="note" class="input" maxlength="120"></div>`, submit: 'Activate Premium', onSubmit: fd => { OWNER_API.decideUpgrade(r.id, 'activate', (fd.get('note') || '').trim()); done('Premium is now on.'); } });
+  },
+  'upg-decline'(el) {
+    const r = UPG.load().find(x => x.id === el.dataset.id);
+    openModal({ title: `Decline the request from ${r.orgName}?`, danger: true, sub: 'The admin will see your reason.', body: `<div class="field"><label for="udR">Reason</label><input id="udR" name="note" class="input" maxlength="140" required placeholder="For example: payment not received"></div>`, submit: 'Decline', onSubmit: fd => { OWNER_API.decideUpgrade(r.id, 'decline', (fd.get('note') || '').trim()); done('Request declined.'); } });
+  },
+  'o-upg-cfg'() {
+    const c = UPG.cfg();
+    openModal({ title: 'Upgrade payment details', size: 'modal-lg', sub: 'Shown to admins who ask to upgrade.', submit: 'Save', body: `<div class="form-row"><div class="field"><label for="ucP">Price shown (for example ₦25,000 per year)</label><input id="ucP" name="price" class="input" maxlength="60" value="${esc(c.price)}"></div><div class="field"><label for="ucB">Bank</label><input id="ucB" name="bank" class="input" maxlength="60" value="${esc(c.bank)}"></div></div>
+      <div class="form-row"><div class="field"><label for="ucN">Account number</label><input id="ucN" name="number" class="input mono" inputmode="numeric" maxlength="12" value="${esc(c.number)}"></div><div class="field"><label for="ucA">Account name</label><input id="ucA" name="name" class="input" maxlength="80" value="${esc(c.name)}"></div></div>
+      <div class="field"><label for="ucL">Paystack payment link (a payment page you made in your Paystack dashboard)</label><input id="ucL" name="paystack" class="input" type="url" maxlength="200" value="${esc(c.paystack)}" placeholder="https://paystack.com/pay/..."></div>
+      <div class="field"><label for="ucT">Short note to admins (optional)</label><input id="ucT" name="note" class="input" maxlength="140" value="${esc(c.note)}"></div>`,
+      onSubmit: fd => { const u = (fd.get('paystack') || '').trim(); if (u && !/^https:\/\//i.test(u)) throw new Error('The Paystack link must start with https://'); const n = (fd.get('number') || '').trim(); if (n && !/^\d{10}$/.test(n)) throw new Error('A bank account number has 10 digits.'); UPG.saveCfg({ price: (fd.get('price') || '').trim(), bank: (fd.get('bank') || '').trim(), number: n, name: (fd.get('name') || '').trim(), paystack: u, note: (fd.get('note') || '').trim() }); olog('Changed upgrade payment details', '', 'Updated'); OWN.save(); done('Saved.'); } });
+  }
+});
+{ const _oa2 = OWNERV['o-account']; OWNERV['o-account'] = function () { const c = UPG.cfg(); return _oa2() + `<section class="panel" style="max-width:640px;margin-top:16px"><div class="panel-h"><div><h2>Upgrade payment details</h2><p>What admins see when they ask for Premium.</p></div><button class="btn btn-primary btn-sm" type="button" data-act="o-upg-cfg">Edit</button></div><dl class="kv"><dt>Price</dt><dd>${esc(c.price || 'Not set')}</dd><dt>Bank account</dt><dd>${c.number ? esc(`${c.bank}, ${c.number}, ${c.name}`) : 'Not set'}</dd><dt>Paystack link</dt><dd>${c.paystack ? 'Set' : 'Not set'}</dd></dl></section>`; }; }
+// Owner alert: new request while the owner console is open (same browser); also a banner at the top of the owner overview
+{ const _oo = OWNERV['o-overview']; OWNERV['o-overview'] = function () { const n = UPG.pending().length; return (n ? `<div class="owner-banner"><div><b>${n} upgrade request${n === 1 ? '' : 's'} waiting.</b> Check the payment and activate Premium.</div><button class="btn btn-saffron btn-sm" type="button" data-act="goto" data-page="o-upgrades">Open requests</button></div>` : '') + _oo(); }; }
+window.addEventListener('storage', e => {
+  if (!e.key) return;
+  if (e.key === UPG.key && S.owner && !S.v) { toast('New upgrade request. Open Upgrade requests to check the payment.', 'ok'); renderSoon(); }
+  else if (e.key === UPG.key && S.v && !S.owner) renderSoon();
+  else if (e.key === PRES_KEY && S.owner && !S.v && S.page === 'o-live' && $('#modalRoot').hidden) renderSoon();
+});
 
 /* ---------- Keep open tabs in step: when another tab (for example the admin verifying a payment) saves
    a village, this tab picks up the change by itself ---------- */
