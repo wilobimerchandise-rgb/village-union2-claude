@@ -596,3 +596,6 @@ h1#pageTitle:focus{outline:none}
 
 .vcard-wings{cursor:default}.vcard-wings:hover{transform:none}.vwings{display:flex;gap:8px;flex-wrap:wrap;margin-top:auto;padding-left:6px}.vwing{font:inherit;font-weight:600;font-size:.84rem;border:1px solid var(--vc,var(--indigo));background:#fff;color:#14142B;border-radius:999px;padding:7px 12px;min-height:38px;cursor:pointer}.vwing:hover,.vwing:focus-visible{background:var(--vc,var(--indigo));color:#fff}
 .lvl{height:10px;border-radius:6px;background:#e8e8f0;overflow:hidden;margin:10px 0 4px}.lvl i{display:block;height:100%;width:0;background:var(--leaf,#2E7D32);transition:width .12s}
+.prem-badge{cursor:pointer}.prem-badge:hover,.prem-badge:focus-visible{outline:2px solid var(--saffron,#F5B83D);outline-offset:2px}
+.remind-text{white-space:pre-wrap;font:inherit;font-size:.92rem;background:#F4F5FB;border-radius:10px;padding:12px 14px;margin:12px 0}
+.radio-row{display:flex;gap:18px;flex-wrap:wrap;margin:6px 0 12px}
