@@ -1761,9 +1761,11 @@ async function receiptPngBasic(r) {
       text('VillageVault', 140, 92, { w: 800, s: 34, c: '#FFFFFF' });
       text('OFFICIAL RECEIPT', 70, 190, { w: 800, s: 58, c: '#FFFFFF' });
       text(r.no, W - 70, 92, { w: 700, s: 28, c: '#F5B83D', a: 'right' });
-      text(r.premium ? r.village : 'Payment receipt', 70, 335, { w: 800, s: 38, c: '#1A1A4E', max: logoImg ? W - 290 : W - 140 });
+      { const nm = r.premium ? r.village : 'Payment receipt', mw = logoImg ? W - 290 : W - 140; let s = 38; g.font = F(800, s); while (s > 24 && g.measureText(nm).width > mw) { s -= 2; g.font = F(800, s); }
+        if (g.measureText(nm).width <= mw) text(nm, 70, 335, { w: 800, s, c: '#1A1A4E' });
+        else { const ws = nm.split(/\s+/), ln = ['']; ws.forEach(w => { const t = ln[ln.length - 1] ? ln[ln.length - 1] + ' ' + w : w; if (g.measureText(t).width > mw && ln[ln.length - 1]) ln.push(w); else ln[ln.length - 1] = t; }); ln.slice(0, 2).forEach((l, i) => text(l, 70, 322 + i * 34, { w: 800, s: 30, c: '#1A1A4E', max: mw })); } }
       if (logoImg) { g.save(); g.beginPath(); g.roundRect ? g.roundRect(W - 170, 290, 100, 100, 18) : g.rect(W - 170, 290, 100, 100); g.clip(); g.drawImage(logoImg, W - 170, 290, 100, 100); g.restore(); g.strokeStyle = '#DCE3E0'; g.lineWidth = 2; g.beginPath(); g.roundRect ? g.roundRect(W - 170, 290, 100, 100, 18) : g.rect(W - 170, 290, 100, 100); g.stroke(); }
-      text(`Issued ${fmtDate(r.issuedAt.slice(0, 10))}`, 70, 378, { w: 500, s: 24, c: '#5B5F7A' });
+      text(`Issued ${fmtDate(r.issuedAt.slice(0, 10))}`, 70, 392, { w: 500, s: 24, c: '#5B5F7A' });
       // amount box
       g.fillStyle = '#EEF2F0'; g.beginPath(); g.roundRect ? g.roundRect(60, 410, W - 120, 190, 22) : g.rect(60, 410, W - 120, 190); g.fill();
       text('Amount received', 90, 456, { w: 600, s: 24, c: '#5B5F7A' });
@@ -1792,7 +1794,7 @@ function receiptPdfBasic(r) {
   pdf.rect(0, 0, pdf.W, 92, '#1A1A4E'); pdf.rect(0, 92, pdf.W, 5, '#F5B83D');
   pdf.text('VillageVault', M, 32, { size: 10, bold: true, color: '#F5B83D' }); pdf.text(r.no, pdf.W - M, 32, { size: 9, bold: true, color: '#F5B83D', align: 'right' });
   pdf.text('OFFICIAL RECEIPT', M, 68, { size: 22, bold: true, color: '#FFFFFF' });
-  pdf.text(pdf.fit(r.premium ? r.village : 'Payment receipt', CW - (r.premium && r.logo ? 60 : 0), 14, true), M, 126, { size: 14, bold: true, color: '#1A1A4E' });
+  { const nm = r.premium ? r.village : 'Payment receipt', mw = CW - (r.premium && r.logo ? 60 : 0); let s = 14; while (s > 9 && pdf.w(nm, s, true) > mw) s -= 1; pdf.text(pdf.fit(nm, mw, s, true), M, 126, { size: s, bold: true, color: '#1A1A4E' }); }
   if (r.premium && r.logo) pdf.img(r.logo, pdf.W - M - 46, 108, 46, 46);
   pdf.text(`Issued ${fmtDate(r.issuedAt.slice(0, 10))}`, M, 142, { size: 9, color: MUT });
   pdf.rect(M, 158, CW, 76, '#EEF2F0');
@@ -2742,9 +2744,12 @@ function drawLetterhead(A, r) {
   A.rect(M, 42, 72, 72, '#FFFFFF');
   if (r.logo) A.img(r.logo, M + 4, 46, 64, 64, 200, 200); else { A.rect(M + 4, 46, 64, 64, GOLD2); A.text(r.code, M + 36, 86, { size: 18, bold: true, color: NAVY, align: 'center' }); }
   const nx = M + 90, nw = CW - 90 - 150;
-  A.text(A.fit(r.village, nw, 22, true), nx, 72, { size: 22, bold: true, color: '#FFFFFF' });
-  if (r.motto) A.text(A.fit(r.motto, nw, 9.5), nx, 90, { size: 9.5, color: GOLD2 });
-  if (r.address) A.text(A.fit(r.address, nw, 8.5), nx, 106, { size: 8.5, color: '#DADCF5' });
+  let ns = 22; while (ns > 14 && A.width(r.village, ns, true) > nw) ns -= 1;
+  const nl = A.width(r.village, ns, true) > nw ? wrapLines(A, r.village, nw, 15).slice(0, 2) : [r.village];   // never cut the name: shrink, then use two lines
+  if (nl.length > 1) { A.text(nl[0], nx, 62, { size: 15, bold: true, color: '#FFFFFF' }); A.text(nl[1], nx, 80, { size: 15, bold: true, color: '#FFFFFF' }); }
+  else A.text(nl[0], nx, 72, { size: ns, bold: true, color: '#FFFFFF' });
+  if (r.motto) A.text(A.fit(r.motto, nw, 9.5), nx, nl.length > 1 ? 95 : 90, { size: 9.5, color: GOLD2 });
+  if (r.address) A.text(A.fit(r.address, nw, 8.5), nx, 109, { size: 8.5, color: '#DADCF5' });
   A.text('OFFICIAL RECEIPT', W - M, 62, { size: 9.5, bold: true, color: GOLD2, align: 'right' });
   A.text(r.no, W - M, 82, { size: 13, bold: true, color: '#FFFFFF', align: 'right' });
   A.text('Issued ' + fmtDate(r.issuedAt.slice(0, 10)), W - M, 100, { size: 8.5, color: '#DADCF5', align: 'right' });
