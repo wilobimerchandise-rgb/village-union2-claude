@@ -2524,7 +2524,7 @@ ADMIN.admins = function () {
   const lead = isLeadAdmin(), admins = S.v.users.filter(u => u.role === 'admin').sort((a, b) => (b.lead ? 1 : 0) - (a.lead ? 1 : 0) || a.id.localeCompare(b.id));
   return `<section class="panel"><div class="panel-h"><div><h2>Admins and duties</h2><p>${lead ? 'As Lead Admin you decide who serves as an admin and what their duty is. Each duty can be held by one person only.' : 'Only the Lead Admin can appoint admins, change duties or remove them. Everyone can see who serves.'}</p></div>${lead ? '<button class="btn btn-primary btn-sm" type="button" data-act="appoint-admin">Appoint an admin</button>' : ''}</div>
   ${table(['Admin', 'Duty', 'Phone', 'Account', ''], admins.map(u => [`${linkBtn('member-profile', u.id, u.name)}<small>${esc(u.id)}${u.lead ? ' · Lead Admin' : ''}</small>`, esc(u.title || 'Admin'), esc(u.phone || '-'), u.active ? '<span class="badge b-active">Active</span>' : '<span class="badge b-off">Deactivated</span>',
-    lead ? `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="assign-duty" data-id="${esc(u.id)}">Change duty</button>${u.lead ? '' : `<button class="btn btn-ghost btn-sm" type="button" data-act="remove-admin" data-id="${esc(u.id)}">Remove</button>`}</div>` : '']), ['No admins', ''])}</section>`;
+    lead ? `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="edit-admin" data-id="${esc(u.id)}">Edit details</button><button class="btn btn-ghost btn-sm" type="button" data-act="assign-duty" data-id="${esc(u.id)}">Change duty</button>${u.lead ? '' : `<button class="btn btn-ghost btn-sm" type="button" data-act="remove-admin" data-id="${esc(u.id)}">Remove</button>`}</div>` : (S.u && S.u.id === u.id ? `<div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="edit-admin" data-id="${esc(u.id)}">Edit my details</button></div>` : '')]), ['No admins', ''])}</section>`;
 };
 VIEWS.admin.admins = ADMIN.admins;
 Object.assign(ACTIONS, {
@@ -4084,6 +4084,24 @@ window.addEventListener('storage', e => {
   else if (e.key === UPG.key && S.v && !S.owner) renderSoon();
   else if (e.key === PRES_KEY && S.owner && !S.v && S.page === 'o-live' && $('#modalRoot').hidden) renderSoon();
 });
+
+/* ---------- Admin details can be corrected too (ROUND 14) ---------- */
+// The Lead Admin (or the owner) can correct any admin's details; an admin can correct their own. Duty, account status and login stay as they are.
+Object.assign(API, {
+  editAdmin(id, d) {
+    requireAdmin(); const u = userById(id); if (!u || u.role !== 'admin') throw new Error('Admin not found.');
+    if (!(isLeadAdmin() || S.u.id === id)) throw new Error('Only the Lead Admin can correct another admin’s details.');
+    const n = (d.name || '').trim(); if (n.length < 3) throw new Error('Enter the full name.');
+    const ch = []; [['name', n], ['family', d.family || ''], ['kindred', d.kindred || ''], ['phone', d.phone || ''], ['email', d.email || '']].forEach(([k, v]) => { if ((u[k] || '') !== v) { ch.push(`${cap(k)}: ${u[k] || 'blank'} to ${v || 'blank'}`); u[k] = v; } });
+    if (!ch.length) throw new Error('Nothing was changed.');
+    u.updatedBy = S.u.name; u.updatedAt = stamp(); log('Corrected admin details', id, `${u.name}: ${ch.join('; ')}`); commit(); return u;
+  }
+});
+ACTIONS['edit-admin'] = function (el) {
+  const u = userById(el.dataset.id); if (!u || u.role !== 'admin') return toast('Admin not found.', 'err');
+  openModal({ title: 'Correct admin details', sub: `${esc(u.id)} · ${esc(u.title || 'Admin')}`, body: `<div class="field"><label for="eaN">Full name</label><input id="eaN" name="name" class="input" value="${esc(u.name)}" required></div><div class="form-row">${isVillageType() ? `<div class="field"><label for="eaF">Family name</label><input id="eaF" name="family" class="input" maxlength="40" value="${esc(u.family || '')}"></div><div class="field"><label for="eaK">Kindred name</label><input id="eaK" name="kindred" class="input" maxlength="40" value="${esc(u.kindred || '')}"></div>` : ''}<div class="field"><label for="eaP">Phone</label><input id="eaP" name="phone" class="input" type="tel" value="${esc(u.phone || '')}"></div></div><div class="field"><label for="eaE">Email</label><input id="eaE" name="email" class="input" type="email" value="${esc(u.email || '')}"></div><p class="hint">Duty and login stay the same. Every correction is recorded with your name.</p>`,
+    submit: 'Save changes', onSubmit: fd => { API.editAdmin(u.id, { name: fd.get('name'), family: isVillageType() ? (fd.get('family') || '').trim() : '', kindred: isVillageType() ? (fd.get('kindred') || '').trim() : '', phone: (fd.get('phone') || '').trim(), email: (fd.get('email') || '').trim() }); done('Admin details updated.'); } });
+};
 
 /* ---------- Keep open tabs in step: when another tab (for example the admin verifying a payment) saves
    a village, this tab picks up the change by itself ---------- */
