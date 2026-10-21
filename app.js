@@ -2672,7 +2672,7 @@ function capNotice() {
 const upgradeBtn = () => (S.u && !S.owner && S.u.role === 'admin' && S.v && S.v.plan !== 'premium') ? '<div class="btn-row" style="margin-top:14px"><button class="btn btn-saffron" type="button" data-act="upgrade-start">Upgrade to Premium</button></div>' : '';
 function upgradeModal(feature) {
   infoModal('Upgrade to Premium', capReached() ? 'Your Basic plan is full' : 'What Premium adds', `<div class="upgrade-box"><div class="up-badge">${premiumBadge}</div><p>The Basic plan covers up to <b>${capWords()}</b> and you have ${activeMembers()} here. Premium removes the limit and adds:</p>
-  <ul class="ticks"><li>No member limit</li><li>Professional letterhead receipts with the Chairman and Financial Secretary signatures</li><li>Your village name, code and logo on every document</li><li>One-click WhatsApp broadcast to members who owe</li><li>Meeting minutes: the Secretary writes, the Chairman approves, both sign</li><li>No VillageVault watermark on documents</li></ul><p class="hint">Your records stay exactly as they are when you move to Premium.</p>${upgradeBtn()}</div>`);
+  <ul class="ticks"><li>No member limit</li><li>Professional letterhead receipts with the Chairman and Financial Secretary signatures</li><li>Your village name, code and logo on every document</li><li>One-click WhatsApp broadcast to members who owe</li><li>Meeting minutes: the Secretary writes, the Chairman approves, both sign</li><li>Emergency levies named by the Chairman, Secretary or Financial Secretary</li><li>Community projects with a progress tracker and donor wall</li><li>Good standing certificate with a QR code</li><li>One-tap AGM report and downloadable village reports for members</li><li>Terms of office tracker, handover pack and agenda builder</li><li>Birthdays and anniversaries with WhatsApp greetings</li><li>No VillageVault watermark on documents</li></ul><p class="hint">Your records stay exactly as they are when you move to Premium.</p>${upgradeBtn()}</div>`);
 }
 Object.assign(ACTIONS, { 'upgrade-info'() { upgradeModal(); } });
 /* =========================================================
@@ -3749,6 +3749,13 @@ const PLAN_TABLE = [
   ['Village name, code and logo on every document', 0, 1],
   ['Meeting minutes (Secretary writes, Chairman approves, both sign)', 0, 1],
   ['WhatsApp broadcast to members who owe (Chairman)', 0, 1],
+  ['Emergency levies (named by Chairman, Secretary or Financial Secretary)', 0, 1],
+  ['Community projects with progress tracker and donor wall', 0, 1],
+  ['Good standing certificate with QR code', 0, 1],
+  ['One-tap AGM report; village reports downloadable by members', 0, 1],
+  ['Terms of office tracker and handover pack', 0, 1],
+  ['Meeting agenda builder', 0, 1],
+  ['Birthdays and anniversaries with WhatsApp greetings', 0, 1],
   ['Change the village code', 0, 1],
   ['Automatic backups', 0, 1]
 ];
@@ -4102,6 +4109,431 @@ ACTIONS['edit-admin'] = function (el) {
   openModal({ title: 'Correct admin details', sub: `${esc(u.id)} · ${esc(u.title || 'Admin')}`, body: `<div class="field"><label for="eaN">Full name</label><input id="eaN" name="name" class="input" value="${esc(u.name)}" required></div><div class="form-row">${isVillageType() ? `<div class="field"><label for="eaF">Family name</label><input id="eaF" name="family" class="input" maxlength="40" value="${esc(u.family || '')}"></div><div class="field"><label for="eaK">Kindred name</label><input id="eaK" name="kindred" class="input" maxlength="40" value="${esc(u.kindred || '')}"></div>` : ''}<div class="field"><label for="eaP">Phone</label><input id="eaP" name="phone" class="input" type="tel" value="${esc(u.phone || '')}"></div></div><div class="field"><label for="eaE">Email</label><input id="eaE" name="email" class="input" type="email" value="${esc(u.email || '')}"></div><p class="hint">Duty and login stay the same. Every correction is recorded with your name.</p>`,
     submit: 'Save changes', onSubmit: fd => { API.editAdmin(u.id, { name: fd.get('name'), family: isVillageType() ? (fd.get('family') || '').trim() : '', kindred: isVillageType() ? (fd.get('kindred') || '').trim() : '', phone: (fd.get('phone') || '').trim(), email: (fd.get('email') || '').trim() }); done('Admin details updated.'); } });
 };
+/* =========================================================
+   ROUND 14 (part 1): QR codes (own encoder, no library), Premium plan rules for the new features,
+   good standing certificate, member village reports and the one-tap AGM report.
+   ========================================================= */
+
+/* ---------- QR code encoder: byte mode, versions 1 to 14, error correction M (L if M is too small) ---------- */
+const QR = (function () {
+  // [ecPerBlock, [[blocks, dataPerBlock], ...]] for versions 1..14
+  const T = { M: [null, [10, [[1, 16]]], [16, [[1, 28]]], [26, [[1, 44]]], [18, [[2, 32]]], [24, [[2, 43]]], [16, [[4, 27]]], [18, [[4, 31]]], [22, [[2, 38], [2, 39]]], [22, [[3, 36], [2, 37]]], [26, [[4, 43], [1, 44]]], [30, [[1, 50], [4, 51]]], [22, [[6, 36], [2, 37]]], [22, [[8, 37], [1, 38]]], [24, [[4, 40], [5, 41]]]],
+    L: [null, [7, [[1, 19]]], [10, [[1, 34]]], [15, [[1, 55]]], [20, [[1, 80]]], [26, [[1, 108]]], [18, [[2, 68]]], [20, [[2, 78]]], [24, [[2, 97]]], [30, [[2, 116]]], [18, [[2, 68], [2, 69]]], [20, [[4, 81]]], [24, [[2, 92], [2, 93]]], [26, [[4, 107]]], [30, [[3, 115], [1, 116]]]] };
+  const ALIGN = [null, [], [6, 18], [6, 22], [6, 26], [6, 30], [6, 34], [6, 22, 38], [6, 24, 42], [6, 26, 46], [6, 28, 50], [6, 30, 54], [6, 32, 58], [6, 34, 62], [6, 26, 46, 66]];
+  const EXP = new Array(512), LOG = new Array(256); { let x = 1; for (let i = 0; i < 255; i++) { EXP[i] = x; LOG[x] = i; x <<= 1; if (x & 256) x ^= 0x11D; } for (let i = 255; i < 512; i++) EXP[i] = EXP[i - 255]; }
+  const mul = (a, b) => (a && b) ? EXP[LOG[a] + LOG[b]] : 0;
+  function rsGen(n) { let g = [1]; for (let i = 0; i < n; i++) { const ng = new Array(g.length + 1).fill(0); for (let j = 0; j < g.length; j++) { ng[j] ^= g[j]; ng[j + 1] ^= mul(g[j], EXP[i]); } g = ng; } return g; }
+  function rsRem(data, n) { const g = rsGen(n), r = new Array(n).fill(0); data.forEach(b => { const f = b ^ r.shift(); r.push(0); if (f) for (let i = 0; i < n; i++) r[i] ^= mul(g[i + 1], f); }); return r; }
+  const dataCap = (lv, v) => T[lv][v][1].reduce((a, [n, d]) => a + n * d, 0);
+  function utf8(s) { return Array.from(unescape(encodeURIComponent(s))).map(c => c.charCodeAt(0)); }
+  function bch(v, poly, deg) { let d = v << deg; const top = Math.floor(Math.log2(poly)); for (let i = Math.floor(Math.log2(d || 1)); i >= top; i--) if (d & (1 << i)) d ^= poly << (i - top); return d; }
+  function build(text) {
+    const bytes = utf8(text); let lv = 'M', ver = 0;
+    for (const L of ['M', 'L']) { for (let v = 1; v <= 14; v++) { const bits = 4 + (v < 10 ? 8 : 16) + 8 * bytes.length; if (Math.ceil(bits / 8) <= dataCap(L, v)) { lv = L; ver = v; break; } } if (ver) break; }
+    if (!ver) throw new Error('Too much text for the QR code.');
+    const cap = dataCap(lv, ver), bits = []; const put = (val, n) => { for (let i = n - 1; i >= 0; i--) bits.push((val >> i) & 1); };
+    put(4, 4); put(bytes.length, ver < 10 ? 8 : 16); bytes.forEach(b => put(b, 8)); put(0, Math.min(4, cap * 8 - bits.length)); while (bits.length % 8) bits.push(0);
+    const cw = []; for (let i = 0; i < bits.length; i += 8) cw.push(parseInt(bits.slice(i, i + 8).join(''), 2)); for (let pad = 0xEC; cw.length < cap; pad ^= 0xEC ^ 0x11) cw.push(pad);
+    const [ec, groups] = T[lv][ver], blocks = []; let pos = 0; groups.forEach(([n, d]) => { for (let i = 0; i < n; i++) { const dd = cw.slice(pos, pos + d); pos += d; blocks.push({ d: dd, e: rsRem(dd, ec) }); } });
+    const out = []; const maxD = Math.max(...blocks.map(b => b.d.length)); for (let i = 0; i < maxD; i++) blocks.forEach(b => { if (i < b.d.length) out.push(b.d[i]); }); for (let i = 0; i < ec; i++) blocks.forEach(b => out.push(b.e[i]));
+    const n = 17 + 4 * ver, M = Array.from({ length: n }, () => new Array(n).fill(null)), F = Array.from({ length: n }, () => new Array(n).fill(false));
+    const set = (r, c, v) => { M[r][c] = v; F[r][c] = true; };
+    const finder = (r0, c0) => { for (let r = -1; r <= 7; r++) for (let c = -1; c <= 7; c++) { const rr = r0 + r, cc = c0 + c; if (rr < 0 || cc < 0 || rr >= n || cc >= n) continue; const d = (r >= 0 && r <= 6 && (c === 0 || c === 6)) || (c >= 0 && c <= 6 && (r === 0 || r === 6)) || (r >= 2 && r <= 4 && c >= 2 && c <= 4); set(rr, cc, d); } };
+    finder(0, 0); finder(0, n - 7); finder(n - 7, 0);
+    for (let i = 8; i < n - 8; i++) { set(6, i, i % 2 === 0); set(i, 6, i % 2 === 0); }
+    const ap = ALIGN[ver]; ap.forEach(r => ap.forEach(c => { if ((r < 9 && c < 9) || (r < 9 && c > n - 10) || (r > n - 10 && c < 9)) return; for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) set(r + dr, c + dc, Math.max(Math.abs(dr), Math.abs(dc)) !== 1); }));
+    set(n - 8, 8, true);
+    for (let i = 0; i < 9; i++) { if (!F[8][i]) set(8, i, false); if (!F[i][8]) set(i, 8, false); } for (let i = 0; i < 8; i++) { if (!F[8][n - 1 - i]) set(8, n - 1 - i, false); if (!F[n - 1 - i][8]) set(n - 1 - i, 8, false); }
+    if (ver >= 7) { const vi = (ver << 12) | bch(ver, 0x1F25, 12); for (let i = 0; i < 18; i++) { const b = ((vi >> i) & 1) === 1, a = n - 11 + (i % 3), c = Math.floor(i / 3); set(a, c, b); set(c, a, b); } }
+    const dbits = []; out.forEach(b => { for (let i = 7; i >= 0; i--) dbits.push((b >> i) & 1); });
+    const place = mask => { const Q = M.map(r => r.slice()); let k = 0, up = true; for (let c = n - 1; c > 0; c -= 2) { if (c === 6) c--; for (let i = 0; i < n; i++) { const r = up ? n - 1 - i : i; for (let j = 0; j < 2; j++) { const cc = c - j; if (F[r][cc]) continue; let bit = k < dbits.length ? dbits[k] : 0; k++; const m = [(r + cc) % 2 === 0, r % 2 === 0, cc % 3 === 0, (r + cc) % 3 === 0, (Math.floor(r / 2) + Math.floor(cc / 3)) % 2 === 0, (r * cc) % 2 + (r * cc) % 3 === 0, ((r * cc) % 2 + (r * cc) % 3) % 2 === 0, ((r + cc) % 2 + (r * cc) % 3) % 2 === 0][mask]; Q[r][cc] = m ? !bit : !!bit; } } up = !up; }
+      const fmt = ((lv === 'L' ? 1 : 0) << 3 | mask), fb = ((fmt << 10) | bch(fmt, 0x537, 10)) ^ 0x5412, g = i => ((fb >> i) & 1) === 1;
+      for (let i = 0; i <= 5; i++) Q[i][8] = g(i); Q[7][8] = g(6); Q[8][8] = g(7); Q[8][7] = g(8); for (let i = 9; i < 15; i++) Q[8][14 - i] = g(i);
+      for (let i = 0; i < 8; i++) Q[8][n - 1 - i] = g(i); for (let i = 8; i < 15; i++) Q[n - 15 + i][8] = g(i); Q[n - 8][8] = true; return Q; };
+    const pen = Q => { let p = 0; for (let t = 0; t < 2; t++) { for (let a = 0; a < n; a++) { let run = 1; for (let b = 1; b < n; b++) { const x = t ? Q[b][a] : Q[a][b], y = t ? Q[b - 1][a] : Q[a][b - 1]; if (x === y) { run++; if (run === 5) p += 3; else if (run > 5) p++; } else run = 1; } } }
+      for (let r = 0; r < n - 1; r++) for (let c = 0; c < n - 1; c++) if (Q[r][c] === Q[r][c + 1] && Q[r][c] === Q[r + 1][c] && Q[r][c] === Q[r + 1][c + 1]) p += 3;
+      const pat = [true, false, true, true, true, false, true, false, false, false, false], pat2 = pat.slice().reverse(); for (let r = 0; r < n; r++) for (let c = 0; c <= n - 11; c++) { let a = true, b = true, a2 = true, b2 = true; for (let k = 0; k < 11; k++) { if (Q[r][c + k] !== pat[k]) a = false; if (Q[r][c + k] !== pat2[k]) b = false; if (Q[c + k][r] !== pat[k]) a2 = false; if (Q[c + k][r] !== pat2[k]) b2 = false; } if (a || b) p += 40; if (a2 || b2) p += 40; }
+      let dark = 0; Q.forEach(r => r.forEach(v => { if (v) dark++; })); p += 10 * Math.floor(Math.abs(dark * 100 / (n * n) - 50) / 5); return p; };
+    let best = null, bp = Infinity; for (let m = 0; m < 8; m++) { const Q = place(m), p = pen(Q); if (p < bp) { bp = p; best = Q; } }
+    return { n, ver, level: lv, rows: best.map(r => r.map(v => !!v)) };
+  }
+  return { build };
+})();
+/* draws a QR through any drawing adapter (PDF or canvas): runs of dark modules become one rectangle */
+function drawQR(A, text, x, y, size, ink) {
+  const q = QR.build(text), quiet = 4, mod = size / (q.n + 2 * quiet); A.rect(x, y, size, size, '#FFFFFF');
+  q.rows.forEach((row, r) => { let c = 0; while (c < q.n) { if (!row[c]) { c++; continue; } let e = c; while (e < q.n && row[e]) e++; A.rect(x + (quiet + c) * mod, y + (quiet + r) * mod, (e - c) * mod + 0.15, mod + 0.15, ink || '#14142B'); c = e; } });
+  return q;
+}
+
+/* ---------- Plan rules for the new Premium features ---------- */
+['terms', 'agenda', 'memberReports', 'agm', 'standing', 'emergency', 'projects', 'celebrations'].forEach(k => { PLAN_RULES.basic[k] = false; PLAN_RULES.premium[k] = true; });
+const premiumGate = (title, text) => `<section class="panel"><div class="panel-h"><div><h2>${esc(title)} ${premiumBadge}</h2><p>${text} ${S.u && S.u.role === 'admin' ? 'Tap the Premium badge to see what you get and upgrade.' : 'Ask your admin to upgrade.'}</p></div></div>${upgradeBtn()}</section>`;
+const holderName = t => { const h = holderOf(t); return h ? h.name : ''; };
+async function hash12(text) { try { const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)); return Array.from(new Uint8Array(b)).slice(0, 6).map(x => x.toString(16).padStart(2, '0')).join('').toUpperCase(); } catch (_) { let h = 2166136261; for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(16).toUpperCase().padStart(8, '0') + '0000'; } }
+const addDays = (iso, n) => { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+
+/* ---------- A small writer for multi-page PDF documents (AGM report, agenda, handover pack, project report) ---------- */
+function docWriter(title, sub, ref) {
+  const pdf = new PDF(), M = 40, CW = pdf.W - 80, INK = '#14142B', MUT = '#5B5F7A', vname = S.v.name;
+  pdf.rect(0, 0, pdf.W, 118, '#1A1A4E'); pdf.rect(0, 118, pdf.W, 5, '#F5B83D');
+  pdf.text(pdf.fit(`${vname} (${S.v.code})`, CW - 150, 10, true), M, 38, { size: 10, bold: true, color: '#F5B83D' });
+  if (S.v.logo) pdf.img(S.v.logo, pdf.W - M - 50, 52, 50, 50);
+  if (ref) pdf.text(ref, pdf.W - M, 38, { size: 9, color: '#DADCF5', align: 'right' });
+  pdf.text(pdf.fit(title, CW - 60, 22, true), M, 72, { size: 22, bold: true, color: '#FFFFFF' }); pdf.text(pdf.fit(sub || '', CW - 60, 12), M, 96, { size: 12, color: '#DADCF5' });
+  let y = 148;
+  const newPage = () => { pdf.add(); pdf.rect(0, 0, pdf.W, 26, '#1A1A4E'); pdf.text(pdf.fit(`${vname} | ${title}`, CW, 8), M, 17, { size: 8, color: '#DADCF5' }); y = 52; };
+  const ensure = h => { if (y + h > pdf.H - 56) newPage(); };
+  const W = {
+    section(t) { y += 8; ensure(60); pdf.text(t, M, y + 4, { size: 12.5, bold: true, color: '#1A1A4E' }); y += 14; pdf.line(M, y, M + CW, y, '#1A1A4E', 1); y += 8; },
+    para(t, o) { o = o || {}; const A = pdfAdapter(pdf); wrapLines(A, t, CW, o.size || 10).forEach(l => { ensure(15); pdf.text(l, M, y + 9, { size: o.size || 10, bold: !!o.bold, color: o.color || INK }); y += (o.size || 10) + 4; }); y += 4; },
+    kv(rows) { rows.forEach(([k, v]) => { ensure(17); pdf.text(k, M, y + 10, { size: 9.5, bold: true, color: MUT }); pdf.text(pdf.fit(String(v), CW - 170, 10), M + 170, y + 10, { size: 10, color: INK }); y += 17; }); y += 6; },
+    table(cols, rows) {
+      const rh = 17, head = () => { pdf.rect(M, y, CW, rh, '#EEF2F0'); let x = M; cols.forEach(c => { pdf.text(c.h, c.align === 'right' ? x + c.w - 6 : x + 6, y + rh - 5.5, { size: 8, bold: true, color: MUT, align: c.align === 'right' ? 'right' : 'left' }); x += c.w; }); y += rh; };
+      ensure(rh * 3); head();
+      if (!rows.length) { pdf.text('Nothing to show.', M + 6, y + 12, { size: 9, color: MUT }); y += rh; }
+      rows.forEach((r, i) => { const cells = r.cells || r; if (y + rh > pdf.H - 56) { newPage(); head(); } if (r.total) pdf.rect(M, y, CW, rh, '#F6EFD8'); else if (i % 2) pdf.rect(M, y, CW, rh, '#FAFCFB'); let x = M; cols.forEach((c, k) => { const s = pdf.fit(String(cells[k] == null ? '' : cells[k]), c.w - 12, 8.5, !!r.total); pdf.text(s, c.align === 'right' ? x + c.w - 6 : x + 6, y + rh - 5.5, { size: 8.5, bold: !!r.total, color: INK, align: c.align === 'right' ? 'right' : 'left' }); x += c.w; }); y += rh; });
+      y += 10;
+    },
+    sign(names) { ensure(70); const n = names.length, w = Math.min(180, (CW - 20 * (n - 1)) / n); names.forEach(([role, nm], i) => { const x = M + i * (w + 20); pdf.line(x, y + 30, x + w, y + 30, '#14142B', .8); pdf.text(pdf.fit(nm || '', w, 9, true), x, y + 42, { size: 9, bold: true, color: INK }); pdf.text(role, x, y + 54, { size: 8.5, color: MUT }); }); y += 70; },
+    space(n) { y += n; },
+    build() { const n = pdf.pages.length; pdf.pages.forEach((pg, i) => { pdf.p = pg; pdf.line(M, pdf.H - 42, M + CW, pdf.H - 42, '#DCE3E0'); pdf.text(pdf.fit(`Generated by ${S.u.name} (${S.u.title || 'Admin'}) on ${fmtTS(stamp())}. Verified payments only.`, CW - 70, 7.5), M, pdf.H - 28, { size: 7.5, color: MUT }); pdf.text(`Page ${i + 1} of ${n}`, M + CW, pdf.H - 28, { size: 7.5, color: MUT, align: 'right' }); }); return pdf.build(title); }
+  };
+  return W;
+}
+const naira = n => '₦' + Math.round(n).toLocaleString('en-US');
+
+/* ---------- Good standing certificate with a QR code ---------- */
+function certText(c) {
+  const kin = c.kindred || c.family ? `Family:${c.family || '-'} Kindred:${c.kindred || '-'}\n` : '';
+  return `VILLAGEVAULT GOOD STANDING\nNo:${c.no}\nName:${c.name}\nID:${c.memberId} (${c.title})\nOrg:${c.org} (${c.code})\n${kin}Tel:${c.phone || '-'}\nEmail:${c.email || '-'}\nJoined:${c.joined}\nPaid ${c.year}:NGN ${c.paid}  Owing:NGN 0\nIssued:${c.issuedOn}  Valid to:${c.validTo}\nCode:${c.code12}`;
+}
+function drawCertificate(A, c, r) {
+  const W = A.W, H = A.H, M = 48, CW = W - 2 * M, NAVY = '#1A1A4E', GOLD = '#C9962B', GOLD2 = '#F5B83D', INK = '#14142B', MUT = '#5B5F7A', LINE = '#E2E2EE';
+  A.strokeRect(16, 16, W - 32, H - 32, GOLD, 1.6); A.strokeRect(21, 21, W - 42, H - 42, NAVY, .5);
+  A.rect(21, 21, W - 42, 116, NAVY); A.rect(21, 137, W - 42, 4, GOLD2); A.rect(M, 42, 72, 72, '#FFFFFF');
+  if (r.logo) A.img(r.logo, M + 4, 46, 64, 64, 200, 200); else { A.rect(M + 4, 46, 64, 64, GOLD2); A.text(c.code, M + 36, 86, { size: 18, bold: true, color: NAVY, align: 'center' }); }
+  const nx = M + 90, nw = CW - 90 - 10; let ns = 22; while (ns > 14 && A.width(c.org, ns, true) > nw) ns -= 1;
+  const nl = A.width(c.org, ns, true) > nw ? wrapLines(A, c.org, nw, 15).slice(0, 2) : [c.org];
+  if (nl.length > 1) { A.text(nl[0], nx, 74, { size: 15, bold: true, color: '#FFFFFF' }); A.text(nl[1], nx, 92, { size: 15, bold: true, color: '#FFFFFF' }); } else A.text(nl[0], nx, 84, { size: ns, bold: true, color: '#FFFFFF' });
+  A.text(c.no, W - M, 128, { size: 9, bold: true, color: GOLD2, align: 'right' });
+  A.text('CERTIFICATE OF GOOD STANDING', W / 2, 190, { size: 22, bold: true, color: NAVY, align: 'center' }); A.line(W / 2 - 90, 202, W / 2 + 90, 202, GOLD2, 2);
+  let y = 232; wrapLines(A, `This is to certify that ${c.name} (${c.memberId}), ${c.title} of ${c.org}, is a member in good standing. Every levy and pledge due for ${c.year} has been paid and verified by the admins as at ${fmtDate(c.issuedOn)}.`, CW, 11.5).forEach(l => { A.text(l, M, y, { size: 11.5, color: INK }); y += 17; });
+  y += 14; const cells = [['Full name', c.name], ['Member ID', c.memberId], ['Role', c.title], ['Village or association', c.org + ' (' + c.code + ')']];
+  if (c.family || c.kindred) { cells.push(['Family', c.family || '-'], ['Kindred', c.kindred || '-']); }
+  cells.push(['Phone', c.phone || '-'], ['Email', c.email || '-'], ['Member since', fmtDate(c.joined)], ['Paid in ' + c.year, naira(c.paid)], ['Outstanding', naira(0)], ['Issued', fmtDate(c.issuedOn)], ['Valid until', fmtDate(c.validTo)]);
+  const cw = (CW - 20) / 2; cells.forEach((k, i) => { const cx = M + (i % 2) * (cw + 20), cy = y + Math.floor(i / 2) * 42; A.text(k[0], cx, cy, { size: 8, color: MUT }); A.text(A.fit(k[1], cw, 11.5, true), cx, cy + 16, { size: 11.5, bold: true, color: INK }); A.line(cx, cy + 24, cx + cw, cy + 24, LINE, .6); });
+  const qy = H - 255; drawQR(A, certText(c), W - M - 150, qy, 150, NAVY); A.text('Scan for the full details', W - M - 75, qy + 160, { size: 8, color: MUT, align: 'center' });
+  const sy = qy + 80, sw = 170; [['Chairman', r.chair], ['Financial Secretary', r.fin]].forEach(([role, p], i) => { const sx = M + i * 0, yy = sy + i * 0; });
+  A.line(M, qy + 70, M + sw, qy + 70, INK, .8); A.text(A.fit(r.chair ? r.chair.name : '', sw, 9.5, true), M, qy + 83, { size: 9.5, bold: true, color: INK }); A.text('Chairman', M, qy + 95, { size: 8.5, color: MUT });
+  A.line(M, qy + 125, M + sw, qy + 125, INK, .8); A.text(A.fit(r.fin ? r.fin.name : '', sw, 9.5, true), M, qy + 138, { size: 9.5, bold: true, color: INK }); A.text('Financial Secretary', M, qy + 150, { size: 8.5, color: MUT });
+  if (r.chair && r.chair.sig) A.img(r.chair.sig, M, qy + 28, 120, 40, 360, 120); if (r.fin && r.fin.sig) A.img(r.fin.sig, M, qy + 83, 120, 40, 360, 120);
+  A.line(M, H - 70, W - M, H - 70, LINE, .8); A.text(`Certificate code ${c.code12}. Check the number with the ${c.org} records. A certificate is not valid after ${fmtDate(c.validTo)} or if it has been withdrawn.`, W / 2, H - 52, { size: 7, color: MUT, align: 'center' });
+}
+function certView(c) {
+  const ch = holderOf('Chairman'), fs = holderOf('Financial Secretary');
+  return { logo: S.v.plan === 'premium' ? S.v.logo : null, chair: ch ? { name: ch.name, sig: ch.signature || null } : null, fin: fs ? { name: fs.name, sig: fs.signature || null } : null };
+}
+async function certPdf(c) { const pdf = new PDF(); drawCertificate(pdfAdapter(pdf), c, certView(c)); return pdf.build(`Good standing ${c.no}`); }
+async function certPng(c) {
+  const r = certView(c), urls = [r.logo, r.chair && r.chair.sig, r.fin && r.fin.sig].filter(Boolean), imgs = {}; for (const u of urls) { try { imgs[u] = await loadImg(u); } catch (_) {} }
+  const PW = 595.28, PH = 841.89, k = 1240 / PW, cv = document.createElement('canvas'); cv.width = 1240; cv.height = Math.round(PH * k); const g = cv.getContext('2d'); g.fillStyle = '#FFFFFF'; g.fillRect(0, 0, cv.width, cv.height);
+  drawCertificate(canvasAdapter(g, k, PW, PH, imgs), c, r); return new Promise((res, rej) => cv.toBlob(b => b ? res(b) : rej(new Error('Could not create the image.')), 'image/png'));
+}
+const certStatus = c => c.revoked ? 'Withdrawn' : (c.validTo < today() ? 'Expired' : 'Valid');
+Object.assign(API, {
+  async issueCertificate(memberId) {
+    if (!S.u || S.owner) throw new Error('Sign in as a member or admin.'); assertFeature('standing', 'The good standing certificate');
+    if (S.u.role !== 'admin' && memberId !== S.u.id) throw new Error('You can only get your own certificate.'); if (S.u.role === 'admin') requireWritable();
+    const u = userById(memberId); if (!u || !['member', 'admin'].includes(u.role) || !u.active) throw new Error('That account is not active.');
+    const yr = new Date().getFullYear(), owe = memberOutstanding(u.id, yr); if (owe > 0) throw new Error(`${u.name} still owes ${money(owe)}. A good standing certificate can be issued once everything due is paid.`);
+    S.v.certs = S.v.certs || []; const old = S.v.certs.find(c => c.memberId === u.id && !c.revoked && c.validTo >= today()); if (old) return old;
+    S.v.seq.cert = (S.v.seq.cert || 0) + 1; const no = `GS-${S.v.code}-${yr}-${String(S.v.seq.cert).padStart(4, '0')}`, vil = vilById(baseId(S.v.id)) || {};
+    const c = { no, memberId: u.id, name: u.name, title: u.role === 'admin' ? (u.title || 'Admin') : 'Member', org: S.v.name, code: S.v.code, family: u.family || '', kindred: u.kindred || '', phone: u.phone || '', email: u.email || '', joined: u.joined || '', year: yr, paid: Math.round(sum(memberPaid(u.id, yr))), issuedOn: today(), validTo: addDays(today(), 90), issuedAt: stamp(), issuedBy: S.u.name, issuedById: S.u.id };
+    c.code12 = await hash12(certText(Object.assign({}, c, { code12: '' })) + '|' + S.v.id); S.v.certs.push(c); log('Issued good standing certificate', no, `${u.name}, valid to ${fmtDate(c.validTo)}`); commit(); return c;
+  },
+  revokeCertificate(no, reason) { requireAdmin(); const c = (S.v.certs || []).find(x => x.no === no); if (!c) throw new Error('Certificate not found.'); if ((reason || '').trim().length < 3) throw new Error('Give a short reason.'); c.revoked = true; c.revokedBy = S.u.name; c.revokedAt = stamp(); c.revokeReason = reason.trim(); log('Withdrew good standing certificate', no, `${c.name}: ${c.revokeReason}`); commit(); return c; }
+});
+function standingView() {
+  if (!planAllows('standing')) return premiumGate('Good standing certificate', 'A members-only certificate with a QR code that carries the member’s full details. Members and admins who have paid everything due can download it as a PDF or an image.');
+  const admin = isAdmin(), yr = new Date().getFullYear(), id = admin ? (S.f.cm || S.u.id) : S.u.id, u = userById(id) || S.u, owe = memberOutstanding(u.id, yr);
+  const mine = (S.v.certs || []).filter(c => c.memberId === u.id).sort((a, b) => b.issuedAt.localeCompare(a.issuedAt));
+  const card = `<section class="panel"><div class="panel-h"><div><h2>${admin && u.id !== S.u.id ? esc(u.name) : 'My certificate'}</h2><p>${esc(u.id)} · ${esc(u.role === 'admin' ? (u.title || 'Admin') : 'Member')}</p></div></div>
+    ${owe > 0 ? `<div class="callout warn"><div><b>Not in good standing yet</b><p>${esc(u.name)} still owes ${money(owe)} for ${yr}. Once it is paid and verified, the certificate can be issued.</p></div></div>` : `<div class="callout"><div><b>In good standing</b><p>Everything due for ${yr} is paid. The certificate is valid for 90 days and shows the member’s full details and a QR code.</p></div></div><div class="btn-row"><button class="btn btn-primary" type="button" data-act="cert-get" data-fmt="pdf" data-id="${esc(u.id)}">Download PDF</button><button class="btn btn-ghost" type="button" data-act="cert-get" data-fmt="png" data-id="${esc(u.id)}">Download image</button></div>`}</section>`;
+  const pick = admin ? `<section class="panel"><div class="panel-h"><div><h2>Choose a member</h2><p>Admins can issue a certificate for any member who is paid up.</p></div></div><div class="toolbar"><div class="field grow2"><label for="cm">Member</label><select id="cm" class="select" data-filter="cm">${memberOpts(u.id, '', true)}</select></div></div></section>` : '';
+  const all = admin ? (S.v.certs || []).slice().sort((a, b) => b.issuedAt.localeCompare(a.issuedAt)) : mine;
+  const list = `<section class="panel"><div class="panel-h"><div><h2>${admin ? 'Certificates issued' : 'My earlier certificates'}</h2><p>Each one has a number you can check.</p></div></div>${table(['Number', 'Member', 'Issued', 'Valid until', 'Status', ''], all.map(c => [`<span class="mono">${esc(c.no)}</span>`, esc(c.name), esc(fmtDate(c.issuedOn)), esc(fmtDate(c.validTo)), certStatus(c) === 'Valid' ? '<span class="badge b-verified">Valid</span>' : `<span class="badge b-rejected">${certStatus(c)}</span>`, admin && !c.revoked ? `<button class="btn btn-danger btn-sm" type="button" data-act="cert-revoke" data-id="${esc(c.no)}">Withdraw</button>` : '']), ['No certificates yet', 'They appear here after the first one is issued.'])}</section>`;
+  const ver = admin ? `<section class="panel"><div class="panel-h"><div><h2>Check a certificate</h2><p>Type the number printed on a certificate to see if it is valid.</p></div></div><div class="toolbar"><div class="field grow2"><label for="cvN">Certificate number</label><input id="cvN" class="input mono" placeholder="GS-CODE-2026-0001"></div><button class="btn btn-primary" type="button" data-act="cert-verify">Check</button></div></section>` : '';
+  return card + pick + list + ver;
+}
+Object.assign(ACTIONS, {
+  async 'cert-get'(el) { const c = await API.issueCertificate(el.dataset.id), blob = el.dataset.fmt === 'png' ? await certPng(c) : await certPdf(c); download(`Good-standing-${c.no}.${el.dataset.fmt === 'png' ? 'png' : 'pdf'}`, blob); renderView(); toast('Certificate downloaded.', 'ok'); },
+  'cert-revoke'(el) { const c = (S.v.certs || []).find(x => x.no === el.dataset.id); openModal({ title: `Withdraw ${c.no}?`, danger: true, sub: `${esc(c.name)}. The certificate will show as withdrawn when checked.`, body: '<div class="field"><label for="crR">Reason</label><input id="crR" name="reason" class="input" maxlength="120" required></div>', submit: 'Withdraw', onSubmit: fd => { API.revokeCertificate(c.no, fd.get('reason')); done('Certificate withdrawn.'); } }); },
+  'cert-verify'() { const n = ($('#cvN').value || '').trim().toUpperCase(); if (!n) return toast('Type the certificate number.', 'err'); const c = (S.v.certs || []).find(x => x.no.toUpperCase() === n); if (!c) return infoModal('Certificate check', n, '<div class="callout warn"><div><b>Not found</b><p>This number was not issued by this village or association.</p></div></div>'); const st = certStatus(c); infoModal('Certificate check', c.no, `<div class="callout ${st === 'Valid' ? '' : 'warn'}"><div><b>${st}</b><p>${esc(c.name)} (${esc(c.memberId)}), issued ${esc(fmtDate(c.issuedOn))}, valid until ${esc(fmtDate(c.validTo))}.${c.revoked ? ' Withdrawn: ' + esc(c.revokeReason) : ''}</p></div></div>`); }
+});
+
+/* ---------- Members can download village reports (Premium) ---------- */
+{ const _b = buildReport; buildReport = function () { const r = _b.apply(this, arguments); if (S.u && S.u.role !== 'admin' && r && r.mode === 'village' && !CONFIG.SHOW_MEMBER_NAMES_IN_VILLAGE_LEDGER) r.members = []; return r; }; }
+{ const _d = downloadReport; downloadReport = function (kind, year, month, memberId) { if (S.u && S.u.role !== 'admin' && !memberId) assertFeature('memberReports', 'Downloading the village reports'); return _d.apply(this, arguments); }; }
+{ const _rv = VIEWS.admin.reports; const wrap = function () { let pre = ''; if (S.u && S.u.role !== 'admin' && !planAllows('memberReports') && (S.f.scope || 'statement') === 'village') { S.f.scope = 'statement'; pre = premiumGate('Village reports for members', 'Members can download the village’s monthly and yearly financial reports.'); }
+  const agm = isAdmin() ? (planAllows('agm') ? `<section class="panel"><div class="panel-h"><div><h2>One-tap AGM report</h2><p>The whole year in one PDF for the annual general meeting: money in and out, debts, pledges, attendance, projects, emergencies and officers.</p></div></div><div class="toolbar"><div class="field"><label for="agmY">Year</label><select id="agmY" class="select">${yearOpts(String(new Date().getFullYear()))}</select></div><button class="btn btn-saffron" type="button" data-act="agm-pdf">Download AGM report</button></div></section>` : premiumGate('One-tap AGM report', 'The whole year in one PDF for the annual general meeting.')) : '';
+  return pre + agm + _rv(); };
+  VIEWS.admin.reports = wrap; VIEWS.member.reports = wrap; }
+
+/* ---------- One-tap AGM report ---------- */
+function agmPdf(year) {
+  const yr = Number(year), tx = S.v.tx.filter(t => t.status === 'verified'), inY = tx.filter(t => yearOf(t.date) === yr), before = tx.filter(t => yearOf(t.date) < yr), ex = activeExp(), exY = ex.filter(e => yearOf(e.date) === yr), exB = ex.filter(e => yearOf(e.date) < yr);
+  const bf = sum(before) - sum(exB), inc = sum(inY), spent = sum(exY), W = docWriter('Annual General Meeting Report', `${S.v.name}, year ${yr}`, `AGM-${S.v.code}-${yr}`);
+  W.section('1. Money in and out'); W.kv([['Brought forward', naira(bf)], ['Income in ' + yr, naira(inc)], ['Spending in ' + yr, naira(spent)], ['Carried forward', naira(bf + inc - spent)]]);
+  W.table([{ h: 'Levy', w: 255 }, { h: 'Payments', w: 80, align: 'right' }, { h: 'Amount', w: 180, align: 'right' }], levyAll().filter(l => !l.removed || inY.some(t => t.levy === l.id)).map(l => { const a = inY.filter(t => t.levy === l.id); return [l.name + (l.emergency ? ' (emergency)' : ''), String(a.length), naira(sum(a))]; }).concat([{ cells: ['Total income', String(inY.length), naira(inc)], total: true }]));
+  const cats = {}; exY.forEach(e => { cats[e.category] = (cats[e.category] || 0) + e.amount; });
+  W.table([{ h: 'Spending category', w: 335 }, { h: 'Amount', w: 180, align: 'right' }], Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, naira(v)]).concat([{ cells: ['Total spending', naira(spent)], total: true }]));
+  const people = S.v.users.filter(u => (u.role === 'member' || u.role === 'admin')), act = people.filter(u => u.active), owing = act.map(u => ({ u, o: memberOutstanding(u.id, yr) })).filter(x => x.o > 0);
+  W.section('2. Membership and debts'); W.kv([['Active members and admins', String(act.length)], ['Joined in ' + yr, String(people.filter(u => (u.joined || '').slice(0, 4) === String(yr)).length)], ['Fully paid up for ' + yr, String(act.length - owing.length)], ['Still owing', `${owing.length} (${naira(sum(owing.map(x => ({ amount: x.o }))))})`]]);
+  const pl = (S.v.pledges || []).filter(p => yearOf(p.date) === yr && p.status !== 'cancelled'); W.section('3. Pledges made in ' + yr);
+  W.kv([['Pledges', String(pl.length)], ['Total pledged', naira(sum(pl))], ['Paid so far', naira(sum(pl.map(p => ({ amount: pledgePaid(p) }))))], ['Still to be paid', naira(sum(pl.map(p => ({ amount: pledgeBal(p) }))))]]);
+  const mt = (S.v.meetings || []).filter(m => yearOf(m.date) === yr); W.section('4. Meetings and attendance');
+  W.table([{ h: 'Date', w: 90 }, { h: 'Meeting', w: 325 }, { h: 'Present', w: 100, align: 'right' }], mt.sort((a, b) => a.date.localeCompare(b.date)).map(m => [fmtDate(m.date), m.title, String(presentCount(m))]));
+  if (mt.length) W.para(`${mt.length} meeting${mt.length === 1 ? '' : 's'} held. Average attendance ${Math.round(mt.reduce((a, m) => a + presentCount(m), 0) / mt.length)} members.`, { size: 9, color: '#5B5F7A' });
+  const mins = (S.v.minutes || []).filter(m => m.status === 'approved' && yearOf(m.date) === yr); W.section('5. Approved minutes'); W.table([{ h: 'Date', w: 90 }, { h: 'Meeting', w: 325 }, { h: 'Number', w: 100 }], mins.map(m => [fmtDate(m.date), m.title, m.no || '-']));
+  const pr = S.v.projects || []; W.section('6. Community projects'); W.table([{ h: 'Project', w: 195 }, { h: 'Target', w: 100, align: 'right' }, { h: 'Raised', w: 100, align: 'right' }, { h: 'Status', w: 120 }], pr.map(p => [p.name, naira(p.target), naira(projectRaised(p)), p.status === 'completed' ? 'Completed' : p.status === 'paused' ? 'Paused' : Math.min(100, Math.round(projectRaised(p) * 100 / p.target)) + '% funded']));
+  const em = levyAll().filter(l => l.emergency); W.section('7. Emergency levies'); W.table([{ h: 'Emergency', w: 215 }, { h: 'Per member', w: 100, align: 'right' }, { h: 'Collected', w: 100, align: 'right' }, { h: 'Status', w: 100 }], em.map(l => [l.name, naira(S.v.settings.levies[l.id] || 0), naira(sum(tx.filter(t => t.levy === l.id))), l.emergency.status === 'closed' ? 'Closed' : 'Open']));
+  const ad = S.v.users.filter(u => u.role === 'admin' && u.active); W.section('8. Officers and terms of office'); W.table([{ h: 'Duty', w: 130 }, { h: 'Name', w: 190 }, { h: 'Term', w: 195 }], ad.map(a => { const t = (S.v.terms || {})[a.id]; return [a.title || 'Admin', a.name, t ? `${fmtDate(t.start)} to ${fmtDate(t.end)}` : 'Not set']; }));
+  W.space(10); W.sign([['Chairman', holderName('Chairman')], ['Secretary', holderName('Secretary')], ['Financial Secretary', holderName('Financial Secretary')]]);
+  return W.build();
+}
+Object.assign(ACTIONS, { 'agm-pdf'() { requireAdmin(); assertFeature('agm', 'The one-tap AGM report'); const y = ($('#agmY') && $('#agmY').value) || new Date().getFullYear(); download(`${S.v.code}-AGM-report-${y}.pdf`, agmPdf(y)); log('Downloaded AGM report', String(y), 'One-tap AGM report'); commit(); toast('AGM report downloaded.', 'ok'); } });
+/* =========================================================
+   ROUND 14 (part 2): term-of-office tracker, agenda builder, emergency levies, community projects,
+   birthdays and anniversaries, navigation and banners. All Premium.
+   ========================================================= */
+const isOrganiser = () => isChairman() || isSecretary() || isFinSec();
+const needOrganiser = () => { requireAdmin(); if (!isOrganiser() && !isLeadAdmin()) throw new Error('Only the Chairman, Secretary or Financial Secretary can do this.'); };
+const dayDiff = (a, b) => Math.round((new Date(b + 'T12:00:00') - new Date(a + 'T12:00:00')) / 86400000);
+const waText = t => `https://wa.me/?text=${encodeURIComponent(t)}`;
+const bar = (pct, tone) => `<div class="pbar" role="img" aria-label="${pct}% done"><span style="width:${Math.max(0, Math.min(100, pct))}%;background:${tone || '#12806A'}"></span></div>`;
+
+/* ---------- Term-of-office tracker ---------- */
+Object.assign(API, {
+  setTerm(adminId, d) {
+    requireLead(); assertFeature('terms', 'The term-of-office tracker'); const u = userById(adminId); if (!u || u.role !== 'admin') throw new Error('Admin not found.');
+    if (!d.start || !d.end) throw new Error('Choose the start and end dates.'); if (d.end <= d.start) throw new Error('The term must end after it starts.');
+    S.v.terms = S.v.terms || {}; S.v.terms[adminId] = { start: d.start, end: d.end, setBy: S.u.name, setAt: stamp() };
+    log('Set term of office', adminId, `${u.name} (${u.title || 'Admin'}): ${fmtDate(d.start)} to ${fmtDate(d.end)}`); commit();
+  }
+});
+function termInfo(id) {
+  const t = (S.v.terms || {})[id]; if (!t) return { t: null, s: 'none', label: 'Not set' };
+  const left = dayDiff(today(), t.end); if (left < 0) return { t, s: 'expired', left, label: `Expired ${-left} day${left === -1 ? '' : 's'} ago` };
+  if (left <= 60) return { t, s: 'soon', left, label: `Ends in ${left} day${left === 1 ? '' : 's'}` };
+  return { t, s: 'ok', left, label: `Running, ${Math.round(left / 30)} months left` };
+}
+function termBanner() {
+  if (!planAllows('terms') || !isAdmin()) return '';
+  const mine = S.v.users.filter(u => u.role === 'admin' && u.active && (isLeadAdmin() || u.id === S.u.id)).map(u => ({ u, i: termInfo(u.id) })).filter(x => x.i.s === 'expired' || x.i.s === 'soon');
+  if (!mine.length) return '';
+  return `<div class="callout warn"><div><b>${mine.length === 1 && !isLeadAdmin() ? 'Your term of office is ending' : 'Terms of office need attention'}</b><p>${mine.slice(0, 3).map(x => `${esc(x.u.name)} (${esc(x.u.title || 'Admin')}): ${esc(x.i.label)}`).join('. ')}.</p></div><button class="btn btn-saffron btn-sm" type="button" data-act="goto" data-page="terms">Open terms</button></div>`;
+}
+function termsView() {
+  if (!planAllows('terms')) return premiumGate('Terms of office', 'Record when each officer’s term starts and ends, get a warning before it ends, and print a handover pack for the next officers.');
+  const lead = isLeadAdmin(), admins = S.v.users.filter(u => u.role === 'admin' && u.active).sort((a, b) => (b.lead ? 1 : 0) - (a.lead ? 1 : 0) || a.id.localeCompare(b.id));
+  const badge = i => i.s === 'ok' ? `<span class="badge b-verified">${esc(i.label)}</span>` : i.s === 'none' ? `<span class="badge b-off">${esc(i.label)}</span>` : i.s === 'soon' ? `<span class="badge b-pending">${esc(i.label)}</span>` : `<span class="badge b-rejected">${esc(i.label)}</span>`;
+  return `<section class="panel"><div class="panel-h"><div><h2>Terms of office</h2><p>${lead ? 'As Lead Admin you set each officer’s term. A warning shows 60 days before a term ends.' : 'The Lead Admin sets the terms. You are warned 60 days before yours ends.'}</p></div><button class="btn btn-saffron btn-sm" type="button" data-act="handover-pdf">Download handover pack</button></div>
+  ${table(['Officer', 'Duty', 'Started', 'Ends', 'Status', ''], admins.map(u => { const i = termInfo(u.id); return [`${esc(u.name)}<small>${esc(u.id)}${u.lead ? ' · Lead Admin' : ''}</small>`, esc(u.title || 'Admin'), i.t ? esc(fmtDate(i.t.start)) : '-', i.t ? esc(fmtDate(i.t.end)) : '-', badge(i), lead ? `<button class="btn btn-ghost btn-sm" type="button" data-act="set-term" data-id="${esc(u.id)}">${i.t ? 'Change term' : 'Set term'}</button>` : '']; }), ['No admins', ''])}</section>
+  <section class="panel"><div class="panel-h"><div><h2>Handover pack</h2><p>One PDF for the incoming officers: who served and when, the balance, debts, bank accounts, open pledges, projects and emergencies.</p></div></div></section>`;
+}
+function handoverPdf() {
+  const yr = new Date().getFullYear(), W = docWriter('Handover pack', `${S.v.name}, prepared ${fmtDate(today())}`, `HAND-${S.v.code}-${today()}`), bal = sum(villageTx()) - sum(activeExp());
+  W.section('1. Officers and terms'); W.table([{ h: 'Duty', w: 120 }, { h: 'Name', w: 170 }, { h: 'Phone', w: 90 }, { h: 'Term', w: 135 }], S.v.users.filter(u => u.role === 'admin' && u.active).map(u => { const t = (S.v.terms || {})[u.id]; return [u.title || 'Admin', u.name, u.phone || '-', t ? `${fmtDate(t.start)} to ${fmtDate(t.end)}` : 'Not set']; }));
+  W.section('2. Money'); W.kv([[balLabel(), naira(bal)], ['Collected in ' + yr, naira(sum(villageTx().filter(t => yearOf(t.date) === yr)))], ['Spent in ' + yr, naira(sum(activeExp().filter(e => yearOf(e.date) === yr)))]]);
+  W.table([{ h: 'Bank', w: 150 }, { h: 'Account number', w: 120 }, { h: 'Account name', w: 245 }], (S.v.settings.accounts || []).map(a => [a.bank, a.number, a.name]));
+  const owing = S.v.users.filter(u => (u.role === 'member' || u.role === 'admin') && u.active).map(u => ({ u, o: memberOutstanding(u.id, yr) })).filter(x => x.o > 0).sort((a, b) => b.o - a.o);
+  W.section('3. Debts still to collect'); W.table([{ h: 'Member', w: 255 }, { h: 'ID', w: 100 }, { h: 'Owes', w: 160, align: 'right' }], owing.map(x => [x.u.name, x.u.id, naira(x.o)]).concat([{ cells: ['Total', '', naira(owing.reduce((a, x) => a + x.o, 0))], total: true }]));
+  W.section('4. Open projects and emergencies'); W.table([{ h: 'Item', w: 255 }, { h: 'Target', w: 130, align: 'right' }, { h: 'Raised', w: 130, align: 'right' }], (S.v.projects || []).filter(p => p.status !== 'completed').map(p => [p.name, naira(p.target), naira(projectRaised(p))]).concat(levyAll().filter(l => l.emergency && l.emergency.status !== 'closed').map(l => [l.name + ' (emergency)', naira((S.v.settings.levies[l.id] || 0) * S.v.users.filter(u => u.active && (u.role === 'member' || u.role === 'admin')).length), naira(sum(S.v.tx.filter(t => t.status === 'verified' && t.levy === l.id)))])));
+  W.space(10); W.sign([['Outgoing officer', ''], ['Incoming officer', ''], ['Lead Admin', S.v.users.filter(u => u.lead)[0] ? S.v.users.filter(u => u.lead)[0].name : '']]);
+  return W.build();
+}
+Object.assign(ACTIONS, {
+  'set-term'(el) { requireLead(); const u = userById(el.dataset.id), t = (S.v.terms || {})[u.id] || {}; openModal({ title: `Term of office for ${u.name}`, sub: esc(u.title || 'Admin'), body: `<div class="form-row"><div class="field"><label for="tmS">Term starts</label><input id="tmS" name="start" class="input" type="date" value="${esc(t.start || today())}" required></div><div class="field"><label for="tmE">Term ends</label><input id="tmE" name="end" class="input" type="date" value="${esc(t.end || addDays(today(), 730))}" required></div></div><p class="hint">Most terms run two years. You will be warned 60 days before it ends.</p>`, submit: 'Save term', onSubmit: fd => { API.setTerm(u.id, { start: fd.get('start'), end: fd.get('end') }); done('Term saved.'); } }); },
+  'handover-pdf'() { requireAdmin(); assertFeature('terms', 'The handover pack'); download(`${S.v.code}-handover-pack.pdf`, handoverPdf()); log('Downloaded handover pack', S.v.code, 'Handover pack'); commit(); toast('Handover pack downloaded.', 'ok'); }
+});
+
+/* ---------- Agenda builder ---------- */
+const canAgenda = () => isChairman() || isSecretary();
+const parseItems = txt => String(txt || '').split('\n').map(l => l.trim()).filter(Boolean).map(l => { const p = l.split('|').map(x => x.trim()); return { t: p[0], who: p[1] || '', mins: Math.max(0, Math.min(240, parseInt(p[2], 10) || 0)) }; });
+Object.assign(API, {
+  saveAgenda(id, d) {
+    requireAdmin(); assertFeature('agenda', 'The agenda builder'); if (!canAgenda()) throw new Error('Only the Secretary or the Chairman can write the agenda.');
+    const t = (d.title || '').trim(); if (t.length < 3) throw new Error('Give the meeting a name.'); if (!d.date) throw new Error('Choose the meeting date.'); const items = parseItems(d.items); if (!items.length) throw new Error('Add at least one agenda item, one per line.');
+    S.v.agendas = S.v.agendas || []; let a;
+    if (id) { a = S.v.agendas.find(x => x.id === id); if (!a) throw new Error('Agenda not found.'); Object.assign(a, { title: t, date: d.date, time: d.time || '', venue: (d.venue || '').trim(), items, notes: (d.notes || '').trim(), updatedBy: S.u.name, updatedAt: stamp() }); log('Edited agenda', id, `${t}, ${fmtDate(d.date)}`); }
+    else { a = { id: nextId('agd', 'AG'), title: t, date: d.date, time: d.time || '', venue: (d.venue || '').trim(), items, notes: (d.notes || '').trim(), status: 'draft', createdBy: S.u.name, createdById: S.u.id, createdAt: stamp() }; S.v.agendas.push(a); log('Created agenda', a.id, `${t}, ${fmtDate(d.date)}`); }
+    commit(); return a;
+  },
+  publishAgenda(id, on) { requireAdmin(); if (!canAgenda()) throw new Error('Only the Secretary or the Chairman can publish the agenda.'); const a = (S.v.agendas || []).find(x => x.id === id); if (!a) throw new Error('Agenda not found.'); a.status = on ? 'published' : 'draft'; log(on ? 'Published agenda' : 'Withdrew agenda', id, a.title); commit(); },
+  deleteAgenda(id) { requireAdmin(); if (!canAgenda()) throw new Error('Only the Secretary or the Chairman can delete an agenda.'); const a = (S.v.agendas || []).find(x => x.id === id); if (!a) throw new Error('Agenda not found.'); S.v.agendas = S.v.agendas.filter(x => x.id !== id); log('Deleted agenda', id, a.title); commit(); }
+});
+function agendaText(a) { return `*${S.v.name}: ${a.title}*\n${fmtDate(a.date)}${a.time ? ' at ' + a.time : ''}${a.venue ? '\nVenue: ' + a.venue : ''}\n\nAgenda:\n${a.items.map((i, n) => `${n + 1}. ${i.t}${i.who ? ' (' + i.who + ')' : ''}${i.mins ? ' - ' + i.mins + ' min' : ''}`).join('\n')}${a.notes ? '\n\n' + a.notes : ''}\n\nPlease come on time.`; }
+function agendaPdf(a) {
+  const W = docWriter('Meeting agenda', `${a.title}, ${fmtDate(a.date)}${a.time ? ' at ' + a.time : ''}`, a.id); if (a.venue) W.kv([['Venue', a.venue]]);
+  W.section('Order of business'); W.table([{ h: 'No', w: 40 }, { h: 'Item', w: 285 }, { h: 'Led by', w: 130 }, { h: 'Minutes', w: 60, align: 'right' }], a.items.map((i, n) => [String(n + 1), i.t, i.who, i.mins ? String(i.mins) : '']).concat([{ cells: ['', 'Planned time', '', String(a.items.reduce((s, i) => s + i.mins, 0)) + ' min'], total: true }]));
+  if (a.notes) { W.section('Notes'); W.para(a.notes); } W.space(8); W.sign([['Secretary', holderName('Secretary')], ['Chairman', holderName('Chairman')]]); return W.build();
+}
+function agendaForm(a) {
+  a = a || {}; return `<div class="field"><label for="agT">Meeting name</label><input id="agT" name="title" class="input" maxlength="80" value="${esc(a.title || '')}" placeholder="Monthly general meeting" required></div>
+  <div class="form-row"><div class="field"><label for="agD">Date</label><input id="agD" name="date" class="input" type="date" value="${esc(a.date || today())}" required></div><div class="field"><label for="agM">Time</label><input id="agM" name="time" class="input" type="time" value="${esc(a.time || '')}"></div></div>
+  <div class="field"><label for="agV">Venue</label><input id="agV" name="venue" class="input" maxlength="80" value="${esc(a.venue || '')}"></div>
+  <div class="field"><label for="agI">Agenda items, one per line: item | led by | minutes</label><textarea id="agI" name="items" class="input" rows="7" placeholder="Opening prayer | Chaplain | 5&#10;Minutes of last meeting | Secretary | 10&#10;Financial report | Financial Secretary | 15">${esc((a.items || []).map(i => [i.t, i.who, i.mins || ''].join(' | ').replace(/( \| )+$/, '')).join('\n'))}</textarea></div>
+  <div class="field"><label for="agN">Notes for members (optional)</label><input id="agN" name="notes" class="input" maxlength="160" value="${esc(a.notes || '')}"></div>`;
+}
+function agendasView() {
+  if (!planAllows('agenda')) return premiumGate('Agenda builder', 'The Secretary or Chairman builds the meeting agenda, publishes it to members, downloads it as a PDF and shares it on WhatsApp.');
+  const can = canAgenda(), list = (S.v.agendas || []).filter(a => can || isAdmin() || a.status === 'published').sort((a, b) => b.date.localeCompare(a.date));
+  return `<section class="panel"><div class="panel-h"><div><h2>Meeting agendas</h2><p>${can ? 'Write the agenda, publish it, then send it to members.' : isAdmin() ? 'The Secretary and Chairman write the agenda. You can read and download it.' : 'Agendas for coming meetings.'}</p></div>${can ? '<button class="btn btn-primary btn-sm" type="button" data-act="new-agenda">New agenda</button>' : ''}</div>
+  ${list.length ? list.map(a => `<div class="rep-item" style="display:block;margin-bottom:12px"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><div><b>${esc(a.title)}</b><br><small>${esc(fmtDate(a.date))}${a.time ? ' at ' + esc(a.time) : ''}${a.venue ? ' · ' + esc(a.venue) : ''} · ${a.status === 'published' ? 'Published' : 'Draft'}</small></div><div class="actions"><button class="btn btn-ghost btn-sm" type="button" data-act="agenda-pdf" data-id="${esc(a.id)}">PDF</button>${isAdmin() ? `<a class="btn btn-leaf btn-sm" target="_blank" rel="noopener noreferrer" href="${esc(waText(agendaText(a)))}">WhatsApp</a>` : ''}${can ? `<button class="btn btn-ghost btn-sm" type="button" data-act="edit-agenda" data-id="${esc(a.id)}">Edit</button><button class="btn btn-${a.status === 'published' ? 'ghost' : 'saffron'} btn-sm" type="button" data-act="pub-agenda" data-id="${esc(a.id)}">${a.status === 'published' ? 'Withdraw' : 'Publish'}</button><button class="btn btn-danger btn-sm" type="button" data-act="del-agenda" data-id="${esc(a.id)}">Delete</button>` : ''}</div></div>
+  <ol class="agenda-list">${a.items.map(i => `<li>${esc(i.t)}${i.who ? ` <small>${esc(i.who)}</small>` : ''}${i.mins ? ` <small>${i.mins} min</small>` : ''}</li>`).join('')}</ol>${a.notes ? `<p class="hint">${esc(a.notes)}</p>` : ''}</div>`).join('') : '<p class="muted">No agenda yet.</p>'}</section>`;
+}
+Object.assign(ACTIONS, {
+  'new-agenda'() { openModal({ title: 'New agenda', size: 'modal-lg', body: agendaForm(), submit: 'Save as draft', onSubmit: fd => { API.saveAgenda('', Object.fromEntries(fd)); done('Agenda saved. Publish it when it is ready.'); } }); },
+  'edit-agenda'(el) { const a = S.v.agendas.find(x => x.id === el.dataset.id); openModal({ title: 'Edit agenda', size: 'modal-lg', sub: esc(a.id), body: agendaForm(a), submit: 'Save changes', onSubmit: fd => { API.saveAgenda(a.id, Object.fromEntries(fd)); done('Agenda updated.'); } }); },
+  'pub-agenda'(el) { const a = S.v.agendas.find(x => x.id === el.dataset.id); API.publishAgenda(a.id, a.status !== 'published'); done(a.status === 'published' ? 'Published. Members can now read it.' : 'Withdrawn.'); },
+  'del-agenda'(el) { const a = S.v.agendas.find(x => x.id === el.dataset.id); openModal({ title: 'Delete this agenda?', danger: true, sub: esc(a.title), body: '<p class="hint">This cannot be undone.</p>', submit: 'Delete', onSubmit: () => { API.deleteAgenda(a.id); done('Agenda deleted.'); } }); },
+  'agenda-pdf'(el) { const a = (S.v.agendas || []).find(x => x.id === el.dataset.id); if (!a || (!isAdmin() && a.status !== 'published')) return toast('Not available.', 'err'); download(`${S.v.code}-agenda-${a.date}.pdf`, agendaPdf(a)); }
+});
+
+/* ---------- Emergency levies ---------- */
+const emergencies = () => levyAll().filter(l => l.emergency);
+const livePeople = () => S.v.users.filter(u => u.active && (u.role === 'member' || u.role === 'admin'));
+Object.assign(API, {
+  openEmergency(d) {
+    requireAdmin(); assertFeature('emergency', 'The emergency levy workflow'); if (!isOrganiser()) throw new Error('Only the Chairman, Secretary or Financial Secretary can open an emergency levy.');
+    const nm = (d.name || '').trim(), amt = Number(d.amount); if (nm.length < 3) throw new Error('Name the emergency, for example “Burial support: late Mr Okeke”.'); if (!(amt > 0)) throw new Error('Enter the amount each member pays.'); if (!d.deadline || d.deadline < today()) throw new Error('Choose a deadline that is today or later.');
+    if (levyAll().some(l => !l.removed && l.name.toLowerCase() === nm.toLowerCase())) throw new Error('A levy with that name already exists.');
+    S.v.seq.lev = (S.v.seq.lev || 0) + 1; const id = 'e' + S.v.seq.lev + Date.now().toString(36).slice(-3);
+    S.v.levyList.push({ id, name: nm, fixed: true, color: '#D2395B', emergency: { reason: (d.reason || '').trim(), deadline: d.deadline, by: S.u.name, byId: S.u.id, byTitle: S.u.title || 'Admin', at: stamp(), status: 'open' } }); S.v.settings.levies[id] = amt;
+    log('Opened emergency levy', id, `${nm}: ${money(amt)} from every member, deadline ${fmtDate(d.deadline)}`); commit(); return id;
+  },
+  closeEmergency(id) { requireAdmin(); if (!isOrganiser()) throw new Error('Only the Chairman, Secretary or Financial Secretary can close an emergency levy.'); const l = levyAll().find(x => x.id === id && x.emergency); if (!l) throw new Error('Emergency not found.'); l.emergency.status = 'closed'; l.emergency.closedAt = stamp(); l.emergency.closedBy = S.u.name; l.removed = true; log('Closed emergency levy', id, `${l.name}: ${money(sum(S.v.tx.filter(t => t.status === 'verified' && t.levy === id)))} collected`); commit(); }
+});
+function emergencyStats(l) {
+  const ppl = livePeople(), amt = S.v.settings.levies[l.id] || 0, paidBy = {}; S.v.tx.filter(t => t.status === 'verified' && t.levy === l.id).forEach(t => { paidBy[t.memberId] = (paidBy[t.memberId] || 0) + t.amount; });
+  const done = ppl.filter(u => (paidBy[u.id] || 0) >= amt), owing = ppl.filter(u => (paidBy[u.id] || 0) < amt), got = sum(S.v.tx.filter(t => t.status === 'verified' && t.levy === l.id));
+  return { ppl, amt, paidBy, done, owing, got, target: amt * ppl.length, left: dayDiff(today(), l.emergency.deadline) };
+}
+function emergencyBanner() {
+  if (!planAllows('emergency') || !S.u || S.owner) return ''; const yr = new Date().getFullYear();
+  const mine = emergencies().filter(l => l.emergency.status !== 'closed' && !l.removed).map(l => ({ l, s: emergencyStats(l) })).filter(x => x.s.owing.some(u => u.id === S.u.id)); if (!mine.length) return '';
+  return mine.map(x => `<div class="callout warn"><div><b>Emergency levy: ${esc(x.l.name)}</b><p>${money(x.s.amt)} from every member${x.l.emergency.reason ? '. ' + esc(x.l.emergency.reason) : ''}. Deadline ${esc(fmtDate(x.l.emergency.deadline))} (${x.s.left < 0 ? -x.s.left + ' days late' : x.s.left === 0 ? 'today' : x.s.left + ' days left'}).</p></div><button class="btn btn-saffron btn-sm" type="button" data-act="emg-pay" data-id="${esc(x.l.id)}">Pay now</button></div>`).join('');
+}
+function emergencyView() {
+  if (!planAllows('emergency')) return premiumGate('Emergency levies', 'When a member dies or the village faces an emergency, the Chairman, Secretary or Financial Secretary names a levy. Every member sees it, can pay it, and the progress is tracked.');
+  const open = emergencies().filter(l => l.emergency.status !== 'closed'), closed = emergencies().filter(l => l.emergency.status === 'closed'), can = isOrganiser();
+  const card = l => { const s = emergencyStats(l), pct = s.target ? Math.round(s.got * 100 / s.target) : 0, mineOwes = s.owing.some(u => S.u && u.id === S.u.id), closedL = l.emergency.status === 'closed';
+    return `<section class="panel"><div class="panel-h"><div><h2>${esc(l.name)}</h2><p>${esc(l.emergency.reason || 'No details given.')}<br><small>Opened by ${esc(l.emergency.by)} (${esc(l.emergency.byTitle)}) on ${esc(fmtTS(l.emergency.at))}</small></p></div><div class="actions">${!closedL && mineOwes ? `<button class="btn btn-saffron btn-sm" type="button" data-act="emg-pay" data-id="${esc(l.id)}">Pay my ${money(s.amt)}</button>` : ''}${!closedL && can ? `<button class="btn btn-ghost btn-sm" type="button" data-act="emg-close" data-id="${esc(l.id)}">Close</button>` : ''}</div></div>
+    <div class="rep-sum"><div><small>Each member</small><b>${money(s.amt)}</b></div><div><small>Collected</small><b>${money(s.got)}</b></div><div><small>Target</small><b>${money(s.target)}</b></div><div><small>${closedL ? 'Closed' : 'Deadline'}</small><b>${closedL ? esc(fmtDate((l.emergency.closedAt || '').slice(0, 10))) : s.left < 0 ? -s.left + ' days late' : s.left + ' days'}</b></div></div>${bar(pct, closedL ? '#5B5F7A' : '#D2395B')}<p class="hint">${s.done.length} of ${s.ppl.length} members have paid (${pct}%).</p>
+    ${isAdmin() && !closedL && s.owing.length ? `<details class="vz-table"><summary>${s.owing.length} still to pay</summary>${table(['Member', 'Phone', ''], s.owing.map(u => [`${esc(u.name)}<small>${esc(u.id)}</small>`, esc(u.phone || '-'), u.phone ? `<a class="btn btn-leaf btn-sm" target="_blank" rel="noopener noreferrer" href="${esc(waLinkTo(u.phone, `Dear ${u.name.split(' ')[0]}, ${S.v.name} has opened an emergency levy: ${l.name}. Please pay ${money(s.amt)} by ${fmtDate(l.emergency.deadline)}. Pay to: ${(S.v.settings.accounts || []).map(a => a.bank + ' ' + a.number + ' (' + a.name + ')').join('; ')}. Then upload your proof in VillageVault.`))}">WhatsApp</a>` : '']), ['Everyone has paid', ''])}</details>` : ''}</section>`; };
+  return `${can ? `<section class="panel"><div class="panel-h"><div><h2>Emergency levies</h2><p>Name a levy for a burial or any emergency. It is added to every member’s bills at once.</p></div><button class="btn btn-saffron btn-sm" type="button" data-act="emg-new">Open an emergency levy</button></div></section>` : ''}${open.map(card).join('') || '<section class="panel"><p class="muted">No emergency levy is open.</p></section>'}${closed.length ? `<div class="sec-title">Closed</div>${closed.map(card).join('')}` : ''}`;
+}
+Object.assign(ACTIONS, {
+  'emg-new'() { if (!isOrganiser()) return toast('Only the Chairman, Secretary or Financial Secretary can open an emergency levy.', 'err'); openModal({ title: 'Open an emergency levy', sub: 'It is added to every active member’s bills straight away.', body: `<div class="field"><label for="emN">Name of the levy</label><input id="emN" name="name" class="input" maxlength="80" placeholder="Burial support: late Mr Okeke" required></div><div class="field"><label for="emR">What happened (members will read this)</label><input id="emR" name="reason" class="input" maxlength="160"></div><div class="form-row"><div class="field"><label for="emA">Amount each member pays (naira)</label><input id="emA" name="amount" class="input" type="number" min="1" required></div><div class="field"><label for="emD">Pay by</label><input id="emD" name="deadline" class="input" type="date" min="${today()}" value="${addDays(today(), 14)}" required></div></div>`, submit: 'Open emergency levy', onSubmit: fd => { API.openEmergency({ name: fd.get('name'), reason: fd.get('reason'), amount: fd.get('amount'), deadline: fd.get('deadline') }); done('Emergency levy opened. Members can see it on their dashboard.'); } }); },
+  'emg-close'(el) { const l = emergencies().find(x => x.id === el.dataset.id), s = emergencyStats(l); openModal({ title: `Close “${l.name}”?`, danger: true, sub: `${s.owing.length} member${s.owing.length === 1 ? '' : 's'} have not paid. Closing removes it from everyone’s bills. Payments already made stay in the records.`, body: '', submit: 'Close emergency levy', onSubmit: () => { API.closeEmergency(l.id); done('Emergency levy closed.'); } }); },
+  'emg-pay'(el) { uploadModal('L:' + el.dataset.id); }
+});
+
+/* ---------- Community projects ---------- */
+const projects = () => S.v.projects || [];
+const projectRaised = p => sum(S.v.tx.filter(t => t.status === 'verified' && t.levy === p.levyId));
+Object.assign(API, {
+  saveProject(id, d) {
+    requireAdmin(); assertFeature('projects', 'Community projects'); if (!isOrganiser() && !isLeadAdmin()) throw new Error('Only the Chairman, Secretary, Financial Secretary or Lead Admin can manage projects.');
+    const nm = (d.name || '').trim(), tg = Number(d.target); if (nm.length < 3) throw new Error('Name the project.'); if (!(tg > 0)) throw new Error('Enter the target amount.');
+    S.v.projects = S.v.projects || []; let p;
+    if (id) { p = S.v.projects.find(x => x.id === id); if (!p) throw new Error('Project not found.'); p.name = nm; p.desc = (d.desc || '').trim(); p.target = tg; p.deadline = d.deadline || ''; p.showDonors = d.showDonors === 'yes'; const l = levyAll().find(x => x.id === p.levyId); if (l) l.name = 'Project: ' + nm; log('Edited project', id, nm); }
+    else {
+      if (levyAll().some(l => !l.removed && l.name.toLowerCase() === ('Project: ' + nm).toLowerCase())) throw new Error('A project with that name already exists.');
+      S.v.seq.lev = (S.v.seq.lev || 0) + 1; const lid = 'p' + S.v.seq.lev + Date.now().toString(36).slice(-3); S.v.levyList.push({ id: lid, name: 'Project: ' + nm, fixed: false, color: '#0E7490', projectLevy: true }); S.v.settings.levies[lid] = 0;
+      p = { id: nextId('prj', 'PR'), name: nm, desc: (d.desc || '').trim(), target: tg, deadline: d.deadline || '', status: 'active', levyId: lid, showDonors: d.showDonors !== 'no', updates: [], createdBy: S.u.name, createdAt: stamp() }; S.v.projects.push(p); log('Started project', p.id, `${nm}, target ${money(tg)}`);
+    }
+    commit(); return p;
+  },
+  projectUpdate(id, text) { requireAdmin(); if (!isOrganiser() && !isLeadAdmin()) throw new Error('Only the Chairman, Secretary, Financial Secretary or Lead Admin can post updates.'); const p = projects().find(x => x.id === id); if (!p) throw new Error('Project not found.'); const t = (text || '').trim(); if (t.length < 3) throw new Error('Write the update.'); p.updates.unshift({ at: stamp(), by: S.u.name, text: t }); log('Project update', id, `${p.name}: ${t.slice(0, 60)}`); commit(); },
+  projectStatus(id, st) { requireAdmin(); if (!isOrganiser() && !isLeadAdmin()) throw new Error('Only the Chairman, Secretary, Financial Secretary or Lead Admin can change a project.'); const p = projects().find(x => x.id === id); if (!p) throw new Error('Project not found.'); p.status = st; const l = levyAll().find(x => x.id === p.levyId); if (l) { if (st === 'completed') l.removed = true; else delete l.removed; } log(st === 'completed' ? 'Completed project' : st === 'paused' ? 'Paused project' : 'Reopened project', id, p.name); commit(); }
+});
+function donors(p) { const m = {}; S.v.tx.filter(t => t.status === 'verified' && t.levy === p.levyId).forEach(t => { m[t.memberId] = (m[t.memberId] || 0) + t.amount; }); return Object.entries(m).map(([id, a]) => ({ id, name: nameOf(id), amount: a })).sort((x, y) => y.amount - x.amount); }
+function projectPdf(p) {
+  const raised = projectRaised(p), W = docWriter('Project report', p.name, p.id); W.kv([['Status', p.status === 'completed' ? 'Completed' : p.status === 'paused' ? 'Paused' : 'In progress'], ['Target', naira(p.target)], ['Raised so far', naira(raised)], ['Funded', Math.min(100, Math.round(raised * 100 / p.target)) + '%'], ['Still needed', naira(Math.max(0, p.target - raised))], ['Deadline', p.deadline ? fmtDate(p.deadline) : 'None']]);
+  if (p.desc) { W.section('About the project'); W.para(p.desc); }
+  if (p.showDonors) { W.section('Donors'); W.table([{ h: 'Name', w: 335 }, { h: 'Given', w: 180, align: 'right' }], donors(p).map(d => [d.name, naira(d.amount)])); }
+  W.section('Progress updates'); W.table([{ h: 'Date', w: 90 }, { h: 'By', w: 120 }, { h: 'Update', w: 305 }], p.updates.map(u => [fmtDate(u.at.slice(0, 10)), u.by, u.text])); W.space(8); W.sign([['Chairman', holderName('Chairman')], ['Financial Secretary', holderName('Financial Secretary')]]); return W.build();
+}
+function projectsView() {
+  if (!planAllows('projects')) return premiumGate('Community projects', 'Start a project such as a borehole or town hall, set a target, and watch the progress bar fill as members give. Members see the donor wall and every update.');
+  const can = isOrganiser() || isLeadAdmin(), list = projects().slice().sort((a, b) => (a.status === 'completed') - (b.status === 'completed') || b.createdAt.localeCompare(a.createdAt));
+  return `<section class="panel"><div class="panel-h"><div><h2>Community projects</h2><p>Projects the village is funding together. Give by uploading proof of payment against the project.</p></div>${can ? '<button class="btn btn-saffron btn-sm" type="button" data-act="prj-new">Start a project</button>' : ''}</div></section>
+  ${list.map(p => { const r = projectRaised(p), pct = Math.round(r * 100 / p.target), dn = donors(p), left = p.deadline ? dayDiff(today(), p.deadline) : null;
+    return `<section class="panel"><div class="panel-h"><div><h2>${esc(p.name)} ${p.status === 'completed' ? '<span class="badge b-verified">Completed</span>' : p.status === 'paused' ? '<span class="badge b-pending">Paused</span>' : ''}</h2><p>${esc(p.desc || '')}</p></div><div class="actions">${p.status === 'active' ? `<button class="btn btn-saffron btn-sm" type="button" data-act="prj-give" data-id="${esc(p.id)}">Give to this project</button>` : ''}${isAdmin() ? `<button class="btn btn-ghost btn-sm" type="button" data-act="prj-pdf" data-id="${esc(p.id)}">Report PDF</button>` : ''}</div></div>
+    <div class="rep-sum"><div><small>Raised</small><b>${money(r)}</b></div><div><small>Target</small><b>${money(p.target)}</b></div><div><small>Still needed</small><b>${money(Math.max(0, p.target - r))}</b></div><div><small>Deadline</small><b>${p.deadline ? (left < 0 ? 'Passed' : left + ' days') : 'None'}</b></div></div>${bar(pct, pct >= 100 ? '#12806A' : '#0E7490')}<p class="hint">${Math.min(pct, 999)}% funded.</p>
+    ${p.showDonors && dn.length ? `<div class="sec-title">Donor wall</div>${table(['Donor', { t: 'Given', num: true }], dn.slice(0, 15).map(d => [esc(d.name), money(d.amount)]), ['', ''])}` : ''}
+    ${p.updates.length ? `<div class="sec-title">Progress updates</div><ul class="feed">${p.updates.slice(0, 5).map(u => `<li><b>${esc(fmtDate(u.at.slice(0, 10)))}</b> ${esc(u.text)} <small>${esc(u.by)}</small></li>`).join('')}</ul>` : ''}
+    ${can ? `<div class="btn-row"><button class="btn btn-ghost btn-sm" type="button" data-act="prj-update" data-id="${esc(p.id)}">Post an update</button><button class="btn btn-ghost btn-sm" type="button" data-act="prj-edit" data-id="${esc(p.id)}">Edit</button>${p.status === 'active' ? `<button class="btn btn-ghost btn-sm" type="button" data-act="prj-state" data-id="${esc(p.id)}" data-st="paused">Pause</button><button class="btn btn-leaf btn-sm" type="button" data-act="prj-state" data-id="${esc(p.id)}" data-st="completed">Mark completed</button>` : `<button class="btn btn-ghost btn-sm" type="button" data-act="prj-state" data-id="${esc(p.id)}" data-st="active">Reopen</button>`}</div>` : ''}</section>`; }).join('') || '<section class="panel"><p class="muted">No project has been started yet.</p></section>'}`;
+}
+const projectForm = p => { p = p || {}; return `<div class="field"><label for="pjN">Project name</label><input id="pjN" name="name" class="input" maxlength="70" value="${esc(p.name || '')}" placeholder="Community borehole" required></div><div class="field"><label for="pjD">What it is for</label><input id="pjD" name="desc" class="input" maxlength="200" value="${esc(p.desc || '')}"></div><div class="form-row"><div class="field"><label for="pjT">Target (naira)</label><input id="pjT" name="target" class="input" type="number" min="1" value="${esc(p.target || '')}" required></div><div class="field"><label for="pjL">Finish by (optional)</label><input id="pjL" name="deadline" class="input" type="date" value="${esc(p.deadline || '')}"></div></div><label class="check"><input type="checkbox" name="showDonors" value="yes"${p.showDonors === false ? '' : ' checked'}> Show donor names to members</label>`; };
+Object.assign(ACTIONS, {
+  'prj-new'() { openModal({ title: 'Start a project', body: projectForm(), submit: 'Start project', onSubmit: fd => { API.saveProject('', { name: fd.get('name'), desc: fd.get('desc'), target: fd.get('target'), deadline: fd.get('deadline'), showDonors: fd.get('showDonors') ? 'yes' : 'no' }); done('Project started. Members can now give to it.'); } }); },
+  'prj-edit'(el) { const p = projects().find(x => x.id === el.dataset.id); openModal({ title: 'Edit project', sub: esc(p.id), body: projectForm(p), submit: 'Save changes', onSubmit: fd => { API.saveProject(p.id, { name: fd.get('name'), desc: fd.get('desc'), target: fd.get('target'), deadline: fd.get('deadline'), showDonors: fd.get('showDonors') ? 'yes' : 'no' }); done('Project updated.'); } }); },
+  'prj-update'(el) { const p = projects().find(x => x.id === el.dataset.id); openModal({ title: `Update on ${p.name}`, body: '<div class="field"><label for="puT">What has happened?</label><input id="puT" name="text" class="input" maxlength="200" required></div>', submit: 'Post update', onSubmit: fd => { API.projectUpdate(p.id, fd.get('text')); done('Update posted.'); } }); },
+  'prj-state'(el) { API.projectStatus(el.dataset.id, el.dataset.st); done('Project updated.'); },
+  'prj-give'(el) { const p = projects().find(x => x.id === el.dataset.id); uploadModal('L:' + p.levyId); },
+  'prj-pdf'(el) { const p = projects().find(x => x.id === el.dataset.id); download(`${S.v.code}-project-${p.id}.pdf`, projectPdf(p)); }
+});
+
+/* ---------- Birthdays and anniversaries ---------- */
+Object.assign(API, {
+  saveDates(id, d) {
+    if (!S.u || S.owner) throw new Error('Sign in first.'); assertFeature('celebrations', 'Birthdays and anniversaries');
+    const u = userById(id); if (!u || !['member', 'admin'].includes(u.role)) throw new Error('Member not found.'); if (u.id !== S.u.id) requireAdmin();
+    const ok = v => !v || /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(v); if (!ok(d.dob) || !ok(d.anniv)) throw new Error('Choose a real month and day.');
+    const ch = []; if ((u.dob || '') !== (d.dob || '')) { ch.push('Birthday'); u.dob = d.dob || ''; } if ((u.anniv || '') !== (d.anniv || '')) { ch.push('Anniversary'); u.anniv = d.anniv || ''; } const h = !!d.hide; if (!!u.hideDates !== h) { ch.push('Visibility'); u.hideDates = h; }
+    if (!ch.length) throw new Error('Nothing was changed.'); u.updatedBy = S.u.name; u.updatedAt = stamp(); log('Updated dates', u.id, `${u.name}: ${ch.join(', ')} changed${u.id !== S.u.id ? ' by ' + S.u.name : ''}`); commit(); return u;
+  }
+});
+const mdNext = md => { const [m, d] = md.split('-').map(Number), now = new Date(), t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()); let n = new Date(now.getFullYear(), m - 1, d); if (n < t0) n = new Date(now.getFullYear() + 1, m - 1, d); return Math.round((n - t0) / 86400000); };
+const mdLabel = md => { const [m, d] = md.split('-').map(Number); return `${d} ${MONTHS[m - 1]}`; };
+function celebrations() {
+  const out = []; livePeople().forEach(u => { if (u.hideDates && u.id !== (S.u && S.u.id)) return;
+    if (u.dob) out.push({ u, kind: 'Birthday', md: u.dob, days: mdNext(u.dob) }); if (u.anniv) out.push({ u, kind: 'Wedding anniversary', md: u.anniv, days: mdNext(u.anniv) });
+    if (u.joined && u.joined.length >= 10) { const md = u.joined.slice(5, 10), yrs = new Date().getFullYear() - Number(u.joined.slice(0, 4)), dd = mdNext(md); if (yrs >= 1 || dd > 0 && yrs >= 0 && new Date(u.joined + 'T12:00:00') < new Date()) out.push({ u, kind: 'Membership anniversary', md, days: dd, years: dd === 0 ? yrs : yrs + (new Date().getFullYear() > Number(u.joined.slice(0, 4)) ? 1 : 0) }); } });
+  return out.sort((a, b) => a.days - b.days || a.u.name.localeCompare(b.u.name));
+}
+const celeGreeting = c => `Dear ${c.u.name.split(' ')[0]}, ${c.kind === 'Birthday' ? 'happy birthday! Wishing you good health and joy' : c.kind === 'Wedding anniversary' ? 'happy wedding anniversary! Wishing you and your family more years of love' : `happy ${c.years ? c.years + '-year ' : ''}membership anniversary! Thank you for standing with us`}. From all of us at ${S.v.name}.`;
+function celebrationBanner() {
+  if (!planAllows('celebrations') || !S.u || S.owner) return ''; const today0 = celebrations().filter(c => c.days === 0); if (!today0.length) return '';
+  return `<div class="callout"><div><b>Celebrating today</b><p>${today0.slice(0, 5).map(c => `${esc(c.u.name)} (${esc(c.kind.toLowerCase())})`).join(', ')}${today0.length > 5 ? ` and ${today0.length - 5} more` : ''}.</p></div><button class="btn btn-saffron btn-sm" type="button" data-act="goto" data-page="celebrations">See all</button></div>`;
+}
+const mdPick = (p, val) => { const [m, d] = (val || '-').split('-'); return `<div class="form-row"><div class="field"><label for="${p}M">Month</label><select id="${p}M" name="${p}M" class="select">${opt('', 'Not set', m || '')}${MONTHS.map((n, i) => opt(pad(i + 1), n, m || '')).join('')}</select></div><div class="field"><label for="${p}D">Day</label><select id="${p}D" name="${p}D" class="select">${opt('', '-', d || '')}${Array.from({ length: 31 }, (_, i) => opt(pad(i + 1), String(i + 1), d || '')).join('')}</select></div></div>`; };
+const mdRead = (fd, p) => fd.get(p + 'M') && fd.get(p + 'D') ? `${fd.get(p + 'M')}-${fd.get(p + 'D')}` : '';
+function celebrationsView() {
+  if (!planAllows('celebrations')) return premiumGate('Birthdays and anniversaries', 'See who is celebrating today and in the next 30 days, and let admins send a greeting on WhatsApp.');
+  const all = celebrations(), tdy = all.filter(c => c.days === 0), soon = all.filter(c => c.days > 0 && c.days <= 30), me = S.u, admin = isAdmin();
+  const row = c => [`${esc(c.u.name)}<small>${esc(c.u.id)}</small>`, esc(c.kind) + (c.years ? `<small>${c.years} year${c.years === 1 ? '' : 's'}</small>` : ''), esc(mdLabel(c.md)), c.days === 0 ? '<b>Today</b>' : c.days === 1 ? 'Tomorrow' : `In ${c.days} days`, admin && c.u.phone ? `<a class="btn btn-leaf btn-sm" target="_blank" rel="noopener noreferrer" href="${esc(waLinkTo(c.u.phone, celeGreeting(c)))}">Greet on WhatsApp</a>` : ''];
+  const heads = ['Member', 'Occasion', 'Date', 'When', ''];
+  return `<section class="panel"><div class="panel-h"><div><h2>Celebrating today</h2><p>Birthdays and anniversaries. Only the day and month are shown, never the year of birth.</p></div></div>${table(heads, tdy.map(row), ['Nobody today', 'Dates appear here once members add them.'])}</section>
+  <section class="panel"><div class="panel-h"><div><h2>Next 30 days</h2></div></div>${table(heads, soon.map(row), ['Nothing in the next 30 days', ''])}</section>
+  <section class="panel"><div class="panel-h"><div><h2>My dates</h2><p>${esc(me.name)}: birthday ${me.dob ? esc(mdLabel(me.dob)) : 'not set'}, anniversary ${me.anniv ? esc(mdLabel(me.anniv)) : 'not set'}${me.hideDates ? ' (hidden from others)' : ''}.</p></div><button class="btn btn-primary btn-sm" type="button" data-act="dates-edit" data-id="${esc(me.id)}">Set my dates</button></div></section>
+  ${admin ? `<section class="panel"><div class="panel-h"><div><h2>Correct a member’s dates</h2><p>If a date was entered wrongly, an admin can fix it.</p></div></div><div class="toolbar"><div class="field grow2"><label for="dmX">Member</label><select id="dmX" class="select">${memberOpts('', '', true)}</select></div><button class="btn btn-ghost" type="button" data-act="dates-other">Set dates</button></div></section>` : ''}`;
+}
+Object.assign(ACTIONS, {
+  'dates-edit'(el) { const u = userById(el.dataset.id); openModal({ title: u.id === S.u.id ? 'My dates' : `Dates for ${u.name}`, sub: 'Only the day and month are kept.', body: `<div class="sec-title">Birthday</div>${mdPick('bd', u.dob)}<div class="sec-title">Wedding anniversary (optional)</div>${mdPick('an', u.anniv)}<label class="check"><input type="checkbox" name="hide" value="1"${u.hideDates ? ' checked' : ''}> Do not show my dates to other members</label>`, submit: 'Save', onSubmit: fd => { API.saveDates(u.id, { dob: mdRead(fd, 'bd'), anniv: mdRead(fd, 'an'), hide: !!fd.get('hide') }); done('Dates saved.'); } }); },
+  'dates-other'() { const id = $('#dmX') && $('#dmX').value; if (!id) return toast('Choose a member.', 'err'); ACTIONS['dates-edit']({ dataset: { id } }); }
+});
+
+/* ---------- Navigation, pages and banners ---------- */
+NAV.admin.push(['terms', 'Terms of office', 'clock'], ['agendas', 'Meeting agenda', 'book'], ['emergency', 'Emergency levies', 'coin'], ['projects', 'Projects', 'village'], ['standing', 'Good standing', 'check'], ['celebrations', 'Birthdays', 'users']);
+NAV.member.push(['reports', 'Reports', 'file'], ['agendas', 'Meeting agenda', 'book'], ['emergency', 'Emergency levies', 'coin'], ['projects', 'Projects', 'village'], ['standing', 'Good standing', 'check'], ['celebrations', 'Birthdays', 'users']);
+Object.assign(TITLES, { terms: 'Terms of office', agendas: 'Meeting agenda', emergency: 'Emergency levies', projects: 'Community projects', standing: 'Good standing certificate', celebrations: 'Birthdays and anniversaries', reports: 'Reports' });
+VIEWS.admin.terms = termsView; VIEWS.admin.agendas = VIEWS.member.agendas = agendasView; VIEWS.admin.emergency = VIEWS.member.emergency = emergencyView; VIEWS.admin.projects = VIEWS.member.projects = projectsView; VIEWS.admin.standing = VIEWS.member.standing = standingView; VIEWS.admin.celebrations = VIEWS.member.celebrations = celebrationsView;
+VIEWS.member.terms = termsView;
+{ const _ao = VIEWS.admin.overview, _mo = VIEWS.member.overview; VIEWS.admin.overview = function () { return termBanner() + emergencyBanner() + celebrationBanner() + _ao.apply(this, arguments); }; VIEWS.member.overview = function () { return emergencyBanner() + celebrationBanner() + _mo.apply(this, arguments); }; }
 
 /* ---------- Keep open tabs in step: when another tab (for example the admin verifying a payment) saves
    a village, this tab picks up the change by itself ---------- */
