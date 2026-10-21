@@ -599,3 +599,8 @@ h1#pageTitle:focus{outline:none}
 .prem-badge{cursor:pointer}.prem-badge:hover,.prem-badge:focus-visible{outline:2px solid var(--saffron,#F5B83D);outline-offset:2px}
 .remind-text{white-space:pre-wrap;font:inherit;font-size:.92rem;background:#F4F5FB;border-radius:10px;padding:12px 14px;margin:12px 0}
 .radio-row{display:flex;gap:18px;flex-wrap:wrap;margin:6px 0 12px}
+.thermo{height:16px;background:#EEF2F0;border-radius:99px;overflow:hidden;margin:10px 0 0}.thermo i{display:block;height:100%;background:linear-gradient(90deg,#12806A,#F5B83D);border-radius:99px;min-width:2px}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+.pbar{height:12px;border-radius:99px;background:#E6E9F2;overflow:hidden;margin:10px 0 4px}.pbar span{display:block;height:100%;border-radius:99px;transition:width .4s}
+.agenda-list{margin:10px 0 0 20px;padding:0}.agenda-list li{margin:4px 0}.agenda-list small{color:var(--muted,#5B5F7A);margin-left:6px}
+.feed{list-style:none;margin:8px 0 0;padding:0}.feed li{padding:6px 0;border-bottom:1px solid #E6E9F2}
