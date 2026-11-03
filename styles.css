@@ -607,3 +607,28 @@ h1#pageTitle:focus{outline:none}
 .ntc-seen{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.ntc-seen .pbar{flex:1;min-width:120px}
 .id-prev{margin:14px 0}.id-prev img{max-width:100%;height:auto;border-radius:10px;box-shadow:0 2px 10px rgba(20,20,43,.18);background:#fff}
 .id-vid{width:100%;max-width:360px;border-radius:10px;margin:8px 0;background:#000}
+
+/* ---------- Round 15b: Premium motion (all of it stops under reduced motion) ---------- */
+@keyframes vvShine{0%{transform:translateX(-130%) skewX(-20deg)}55%,100%{transform:translateX(330%) skewX(-20deg)}}
+@keyframes vvPulse{0%{box-shadow:0 0 0 0 rgba(245,184,61,.55)}70%,100%{box-shadow:0 0 0 12px rgba(245,184,61,0)}}
+@keyframes vvFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+@keyframes vvGlow{0%,100%{box-shadow:0 10px 30px -14px rgba(245,184,61,.55)}50%{box-shadow:0 14px 38px -10px rgba(245,184,61,.95)}}
+@keyframes vvTick{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:none}}
+.btn{transition:transform .18s ease,box-shadow .2s ease,background .2s ease}
+.btn:hover{transform:translateY(-2px)}.btn:active{transform:translateY(0) scale(.97)}
+/* landing */
+.hero .btn-saffron,.hero .btn-primary,#plans .plan-flag,.cta .btn-saffron{position:relative;overflow:hidden}
+.hero .btn-saffron{animation:vvPulse 2.6s ease-out infinite}
+.hero .btn-saffron::after,.cta .btn-saffron::after{content:"";position:absolute;top:0;bottom:0;left:0;width:34%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.55),transparent);animation:vvShine 3.4s ease-in-out infinite;pointer-events:none}
+.plan-premium{animation:vvGlow 3.2s ease-in-out infinite}
+.plan-flag{display:inline-block;animation:vvFloat 2.4s ease-in-out infinite}
+.plan-premium .tick-list li{opacity:0;animation:vvTick .5s ease forwards}
+.plan-premium .tick-list li:nth-child(1){animation-delay:.05s}.plan-premium .tick-list li:nth-child(2){animation-delay:.1s}.plan-premium .tick-list li:nth-child(3){animation-delay:.15s}.plan-premium .tick-list li:nth-child(4){animation-delay:.2s}.plan-premium .tick-list li:nth-child(5){animation-delay:.25s}.plan-premium .tick-list li:nth-child(6){animation-delay:.3s}.plan-premium .tick-list li:nth-child(7){animation-delay:.35s}.plan-premium .tick-list li:nth-child(8){animation-delay:.4s}.plan-premium .tick-list li:nth-child(9){animation-delay:.45s}.plan-premium .tick-list li:nth-child(10){animation-delay:.5s}.plan-premium .tick-list li:nth-child(n+11){animation-delay:.55s}
+/* dashboards on a Premium plan */
+body.prem-on .shell .btn-saffron{position:relative;overflow:hidden;animation:vvPulse 3s ease-out infinite}
+body.prem-on .shell .btn-saffron::after{content:"";position:absolute;top:0;bottom:0;left:0;width:34%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.5),transparent);animation:vvShine 4s ease-in-out infinite;pointer-events:none}
+body.prem-on .shell .btn-leaf{position:relative;overflow:hidden}
+body.prem-on .shell .callout .btn{animation:vvPulse 2.8s ease-out infinite}
+body.prem-on .shell .navlist a:hover,body.prem-on .shell .navlist button:hover{transform:translateX(3px)}
+body.prem-on .shell .kpi{transition:transform .2s ease,box-shadow .2s ease}body.prem-on .shell .kpi:hover{transform:translateY(-3px);box-shadow:0 12px 26px -14px rgba(26,26,78,.4)}
+@media (prefers-reduced-motion:reduce){.hero .btn-saffron,.plan-premium,.plan-flag,body.prem-on .shell .btn-saffron,body.prem-on .shell .callout .btn{animation:none!important}.plan-premium .tick-list li{opacity:1;animation:none!important}.hero .btn-saffron::after,.cta .btn-saffron::after,body.prem-on .shell .btn-saffron::after{display:none}.btn:hover{transform:none}}
