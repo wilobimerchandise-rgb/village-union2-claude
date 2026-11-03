@@ -2672,7 +2672,7 @@ function capNotice() {
 const upgradeBtn = () => (S.u && !S.owner && S.u.role === 'admin' && S.v && S.v.plan !== 'premium') ? '<div class="btn-row" style="margin-top:14px"><button class="btn btn-saffron" type="button" data-act="upgrade-start">Upgrade to Premium</button></div>' : '';
 function upgradeModal(feature) {
   infoModal('Upgrade to Premium', capReached() ? 'Your Basic plan is full' : 'What Premium adds', `<div class="upgrade-box"><div class="up-badge">${premiumBadge}</div><p>The Basic plan covers up to <b>${capWords()}</b> and you have ${activeMembers()} here. Premium removes the limit and adds:</p>
-  <ul class="ticks"><li>No member limit</li><li>Professional letterhead receipts with the Chairman and Financial Secretary signatures</li><li>Your village name, code and logo on every document</li><li>One-click WhatsApp broadcast to members who owe</li><li>Meeting minutes: the Secretary writes, the Chairman approves, both sign</li><li>Emergency levies named by the Chairman, Secretary or Financial Secretary</li><li>Community projects with a progress tracker and donor wall</li><li>Good standing certificate with a QR code</li><li>One-tap AGM report and downloadable village reports for members</li><li>Terms of office tracker, handover pack and agenda builder</li><li>Birthdays and anniversaries with WhatsApp greetings</li><li>No VillageVault watermark on documents</li></ul><p class="hint">Your records stay exactly as they are when you move to Premium.</p>${upgradeBtn()}</div>`);
+  <ul class="ticks"><li>No member limit</li><li>Professional letterhead receipts with the Chairman and Financial Secretary signatures</li><li>Your village name, code and logo on every document</li><li>WhatsApp broadcast to everyone, with a contacts file</li><li>Notice board with "seen by 40 of 60"</li><li>Member ID card with QR check-in</li><li>Meeting minutes: the Secretary writes, the Chairman approves, both sign</li><li>Emergency levies named by the Chairman, Secretary or Financial Secretary</li><li>Community projects with a progress tracker and donor wall</li><li>Good standing certificate with a QR code</li><li>One-tap AGM report and downloadable village reports for members</li><li>Terms of office tracker, handover pack and agenda builder</li><li>Birthdays and anniversaries with an admin widget and custom wish messages</li><li>No VillageVault watermark on documents</li></ul><p class="hint">Your records stay exactly as they are when you move to Premium.</p>${upgradeBtn()}</div>`);
 }
 Object.assign(ACTIONS, { 'upgrade-info'() { upgradeModal(); } });
 /* =========================================================
@@ -3748,14 +3748,17 @@ const PLAN_TABLE = [
   ['Receipts and reports', 'VillageVault watermark', 'Letterhead, signed by the Chairman and Financial Secretary'],
   ['Village name, code and logo on every document', 0, 1],
   ['Meeting minutes (Secretary writes, Chairman approves, both sign)', 0, 1],
-  ['WhatsApp broadcast to members who owe (Chairman)', 0, 1],
+  ['WhatsApp broadcast to everyone, members who owe, or admins, with a contacts file (Chairman or Financial Secretary)', 0, 1],
+  ['Notice board with "seen by 40 of 60" and a list of who has not seen it', 0, 1],
+  ['Member ID card with QR check-in at meetings', 0, 1],
   ['Emergency levies (named by Chairman, Secretary or Financial Secretary)', 0, 1],
   ['Community projects with progress tracker and donor wall', 0, 1],
   ['Good standing certificate with QR code', 0, 1],
   ['One-tap AGM report; village reports downloadable by members', 0, 1],
   ['Terms of office tracker and handover pack', 0, 1],
   ['Meeting agenda builder', 0, 1],
-  ['Birthdays and anniversaries with WhatsApp greetings', 0, 1],
+  ['Birthdays and anniversaries: dates on profiles, admin dashboard widget, custom wish messages', 0, 1],
+  ['Share button that attaches the PDF in WhatsApp on phones (receipts, notices, reminders, certificates, agendas)', 1, 1],
   ['Change the village code', 0, 1],
   ['Automatic backups', 0, 1]
 ];
@@ -4784,7 +4787,7 @@ Object.assign(ACTIONS, {
     } catch (ex) { toast('Could not open the camera. Allow camera access, or type the code instead.', 'err'); }
   }
 });
-{ const _rv = renderView; renderView = function () { scanStop(); const r = _rv.apply(this, arguments);
+{ const _rv = renderView; renderView = function () { scanStop(); const r = _rv.apply(this, arguments); try { document.body.classList.toggle('prem-on', !S.owner && !!S.v && S.v.plan === 'premium'); } catch (_) {}
   const im = $('#idImg'); if (im && S.u && planAllows('idcard')) { const u = userById(isAdmin() ? (S.f.idm || S.u.id) : S.u.id) || S.u; idCardPng(u).then(b => { const el = $('#idImg'); if (el) el.src = URL.createObjectURL(b); }).catch(() => {}); } return r; }; }
 
 /* ---------- Navigation, pages and banners ---------- */
