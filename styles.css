@@ -604,3 +604,6 @@ h1#pageTitle:focus{outline:none}
 .pbar{height:12px;border-radius:99px;background:#E6E9F2;overflow:hidden;margin:10px 0 4px}.pbar span{display:block;height:100%;border-radius:99px;transition:width .4s}
 .agenda-list{margin:10px 0 0 20px;padding:0}.agenda-list li{margin:4px 0}.agenda-list small{color:var(--muted,#5B5F7A);margin-left:6px}
 .feed{list-style:none;margin:8px 0 0;padding:0}.feed li{padding:6px 0;border-bottom:1px solid #E6E9F2}
+.ntc-seen{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.ntc-seen .pbar{flex:1;min-width:120px}
+.id-prev{margin:14px 0}.id-prev img{max-width:100%;height:auto;border-radius:10px;box-shadow:0 2px 10px rgba(20,20,43,.18);background:#fff}
+.id-vid{width:100%;max-width:360px;border-radius:10px;margin:8px 0;background:#000}
