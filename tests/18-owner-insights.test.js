@@ -1,0 +1,13 @@
+const { chromium } = require('playwright');
+(async()=>{const b=await chromium.launch();const ctx=await b.newContext({viewport:{width:1360,height:900}});await ctx.route(/fonts\.g/,r=>r.abort());await require('./_parent-options')(ctx);
+const ok=(c,m)=>console.log((c?'PASS ':'FAIL ')+m);const U=(process.env.BASE_URL||'http://localhost:8765/index.html');const errs=[];
+const p=await ctx.newPage();p.on('pageerror',e=>errs.push(e.message));
+await p.goto(U+'#owner');await p.waitForTimeout(500);await p.fill('#ownId','OWNER');await p.fill('#ownPw','owner-2026');await p.click('#ownerBtn');await p.waitForSelector('.shell');
+await p.click('.navlist [data-page=o-insights]');await p.waitForTimeout(400);
+ok(/Collection rate by village/.test(await p.textContent('#view')),'insights page opens');
+ok((await p.$$('.vz-row')).length===10,'one bar per village');
+await p.hover('.vz-bar >> nth=0');await p.waitForTimeout(150);ok(!(await p.$eval('.vz-tip',e=>e.hidden))&&/collected/.test(await p.textContent('.vz-tip')),'tooltip on hover');
+await p.focus('.vz-bar >> nth=1');await p.waitForTimeout(150);ok(/collected/.test(await p.textContent('.vz-tip')),'tooltip on keyboard focus');
+ok((await p.$$('details.vz-table')).length>=3,'table views offered');
+ok(/₦/.test(await p.textContent('#view'))&&!/NGN/.test(await p.textContent('#view')),'amounts use the naira sign');
+console.log('ERRORS',JSON.stringify(errs));await b.close()})().catch(e=>{console.log('FATAL',e.message.slice(0,400));process.exit(1)});
