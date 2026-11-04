@@ -1,0 +1,14 @@
+const { chromium } = require('playwright');
+(async()=>{const b=await chromium.launch();const ctx=await b.newContext({viewport:{width:1360,height:900}});await ctx.route(/fonts\.g/,r=>r.abort());await require('./_parent-options')(ctx);
+const ok=(c,m)=>console.log((c?'PASS ':'FAIL ')+m);const U=process.env.BASE_URL;const errs=[];
+const p=await ctx.newPage();p.on('pageerror',e=>errs.push(e.message));p.setDefaultTimeout(8000);
+const login=async(id,pw)=>{await p.goto(U);await p.evaluate(()=>sessionStorage.clear());await p.goto(U);await p.waitForTimeout(250);await p.selectOption('#heroVillage','umuokpu~men');await p.fill('#loginId',id);await p.fill('#loginPw',pw);await p.click('#loginBtn');await p.waitForTimeout(800);};
+await login('UMKM-A01','umkm-admin');
+await p.click('.navlist [data-page=admins]');await p.waitForTimeout(300);
+ok((await p.$$('[data-act=edit-admin]')).length>=2,'Lead Admin sees Edit details for every admin');
+await p.click('tr:has-text("UMKM-A02") [data-act=edit-admin]');await p.fill('#eaN','Chinedu Okoye Corrected');await p.fill('#eaP','08012345678');await p.click('#mSubmit');await p.waitForTimeout(400);
+ok(/Chinedu Okoye Corrected/.test(await p.textContent('#view')),'the corrected name shows on the Admins page');
+await p.click('.navlist [data-page=audit]');await p.waitForTimeout(300);ok(/Corrected admin details/.test(await p.textContent('#view')),'the correction is in the audit trail with the editor named');
+await login('UMKM-A02','umkm-admin');await p.click('.navlist [data-page=admins]');await p.waitForTimeout(300);
+ok((await p.$$('[data-act=edit-admin]')).length===1,'another admin can edit only their own details');
+errs.length&&console.log('FAIL '+errs.join('|'));ok(errs.length===0,'no page errors');await b.close();})().catch(e=>{console.log('FATAL '+e.message);process.exit(1)});
