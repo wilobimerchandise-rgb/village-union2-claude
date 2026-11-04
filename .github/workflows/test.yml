@@ -1,0 +1,18 @@
+name: tests
+on: [push, pull_request]
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm install
+      - run: npx playwright install --with-deps chromium
+      - name: app.js must match the parts it is built from
+        run: |
+          cp app.js /tmp/app.committed.js
+          sh build.sh
+          diff -q app.js /tmp/app.committed.js
+      - run: npm test
