@@ -11,6 +11,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
 </head>
 <body>
 
@@ -27,6 +29,7 @@
         <a href="#how" data-act="scroll" data-target="how">How it works</a>
         <a href="#villages" data-act="scroll" data-target="villages">Villages</a>
         <a href="#accountability" data-act="scroll" data-target="accountability">Accountability</a>
+        <a href="#demo" data-act="scroll" data-target="demo">Live demo</a>
         <a href="#plans" data-act="scroll" data-target="plans">Plans</a>
         <a href="#faq" data-act="scroll" data-target="faq">Questions</a>
       </nav>
@@ -66,7 +69,7 @@
               <div class="demo-box" id="demoBox" hidden></div>
             </form>
           </div>
-          <p class="hero-more"><a href="#how" data-act="scroll" data-target="how">See how it works</a></p>
+          <p class="hero-more"><a href="#how" data-act="scroll" data-target="how">See how it works</a> &nbsp;&middot;&nbsp; <a href="#demo" data-act="scroll" data-target="demo">Try the live demo</a></p>
           <ul class="hero-points">
             <li>Each village sees only its own records</li>
             <li>Monthly and yearly reports as PDF</li>
@@ -182,6 +185,41 @@
     </section>
 
     <!-- FAQ -->
+    <!-- LIVE DEMO -->
+    <section class="section" id="demo">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>See it before you sign up</h2>
+          <p>Open a sample village with made-up names and figures. Look around as a member or as an admin, switch between Basic and Premium, or take the five-step tour. Nothing you do here is saved or sent.</p>
+        </div>
+        <div class="demo-grid">
+          <div class="demo-copy">
+            <ul class="tick-list">
+              <li>A member uploads proof of payment</li>
+              <li>The admin verifies it and the receipt appears</li>
+              <li>Notice board, ID card with QR check-in and year in review</li>
+              <li>Switch between Basic and Premium to see the difference</li>
+            </ul>
+            <div class="btn-row">
+              <button class="btn btn-saffron" type="button" data-act="demo-start" data-role="admin" data-tour="1">Take the 5-step tour</button>
+              <button class="btn btn-primary" type="button" data-act="demo-start" data-role="admin">Open as an admin</button>
+              <button class="btn btn-ghost" type="button" data-act="demo-start" data-role="member">Open as a member</button>
+            </div>
+            <p class="plan-note">Sample data only. No sign-up and no password.</p>
+          </div>
+          <div class="demo-mock" aria-hidden="true">
+            <div class="dm-top"><i></i><i></i><i></i><span>Demo Village (sample data)</span></div>
+            <div class="dm-kpis"><div><small>Collected</small><b>&#8358;268,000</b></div><div><small>Paid up</small><b>78%</b></div><div><small>Waiting</small><b>4</b></div></div>
+            <div class="dm-row"><b>Annual general meeting</b><span>Seen by 40 of 60</span></div>
+            <div class="pbar"><span style="width:67%;background:#12806A"></span></div>
+            <div class="dm-row"><b>Community borehole</b><span>64% funded</span></div>
+            <div class="pbar"><span style="width:64%;background:#F5B83D"></span></div>
+            <div class="dm-id"><b>Demo Village</b><span>Chinedu Okeke</span><small>DEMO-M014 &middot; Member</small><i></i></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- PLANS -->
     <section class="section" id="plans">
       <div class="wrap">
@@ -200,6 +238,11 @@
               <li>Receipts, monthly and yearly reports and statements</li>
               <li>Attendance register, pledges and achievements</li>
               <li>Share button that attaches PDFs in WhatsApp on phones</li>
+              <li>Excel export of payments, members, the owing list and expenses</li>
+              <li>Install on a phone and keep working without a signal</li>
+              <li>Setup checklist and two-step sign-in for admins</li>
+              <li>Help desk for admins (standard queue)</li>
+              <li>Try Premium free for 30 days, once</li>
               <li>Villages get a Men's Wing and a Women's Wing</li>
               <li>VillageVault watermark on documents</li>
             </ul>
@@ -223,6 +266,9 @@
               <li>Good standing certificate with a QR code</li>
               <li>Emergency levies named by the Chairman, Secretary or Financial Secretary</li>
               <li>Community projects with a progress tracker and donor wall</li>
+              <li>Village year in review, ready to download or share</li>
+              <li>Bulk member import from Excel or CSV</li>
+              <li>Priority support with a direct WhatsApp line</li>
               <li>Change your village code and use automatic backups</li>
             </ul>
           </article>
